@@ -33,9 +33,9 @@ DMG layout is a standard application + Applications shortcut, created with hdiut
 After publishing, download the actual GitHub release assets, run the SHA-256 checks, and verify the feed and DMG with the committed public key (no private credentials needed):
 
 ```sh
-swift scripts/verify-update.swift Config/SparklePublicKey.txt release-assets/appcast.xml release-assets/Reclaim-0.1.0-macos-universal.dmg
+swift scripts/verify-update.swift Config/SparklePublicKey.txt release-assets/appcast.xml "release-assets/Reclaim-$(cat VERSION)-macos-universal.dmg"
 ```
 
 The release feed script also runs this public-key check before publication, so a mismatched signing secret cannot produce a seemingly valid but unusable updater feed.
 
-Also verify the app's nested code signatures, `xcrun stapler validate`, `spctl --assess --type execute --verbose=2`, and universal architectures. Reclaim 0.1.0's downloaded DMG and ZIP passed these checks, and the running signed app successfully reported **You're up to date** from the live signed feed. An installation from an older version has not yet been exercised because this is the first release.
+Also verify the app's nested code signatures, `xcrun stapler validate`, `spctl --assess --type execute --verbose=2`, and universal architectures. Both 0.1.0 and 0.1.1 published downloads passed these checks. A real production update from 0.1.0 (build 1) to 0.1.1 (build 2) was completed through Sparkle in `/Applications/Reclaim.app`, including download, verification, Install and Relaunch, and verification of the relaunched installed app. Existing saved scan data was retained. Intel and oldest-supported-macOS runtime checks remain outstanding; the updater test ran on Apple Silicon macOS 27.0.1.
