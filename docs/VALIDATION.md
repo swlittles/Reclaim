@@ -72,3 +72,14 @@ Discovery is comprehensive within accessible configured roots, known tool worktr
 - Reclaim uses its own new Sparkle key. Only the existing Apple signing/notarization credentials were reused. The encrypted bootstrap workflow run/artifact, temporary Bustelo branch, one-time transfer key, and local credential transfer files were removed; Bustelo's default branch/release setup was unchanged.
 
 The remaining runtime matrix limits above still apply: Intel execution, oldest supported macOS execution, and installation of a future update from an older production version have not been tested. Public distribution and signing configuration are complete.
+
+
+## 0.1.1 follow-up — impact, selection, and worktrees
+
+- 20 core fixture tests and 5 release checks passed. New cases cover app bundles/settings/databases versus caches and unknown files; protected-classification independence; bulk filtering/exclusions/same-path and parent/child overlaps; one-known-duplicate retention; nested-file and Git activity overriding old directory timestamps; unknown/incomplete age exclusion; local Claude discovery and custom environment candidates; shared-cache protection precedence and legacy scan compatibility.
+- Both universal release configurations built successfully as isolated Reclaim Dev; bundle validation, nested signature checks, architecture inspection, and Dev updater isolation passed.
+- Native fixture-only targeted scan returned six findings: one main repository, four linked worktrees, and one evidenced dependency artifact. Linked-worktree default showed four rows, with two eligible and two protected; the main repository was not mixed into that list.
+- The two-week age filter showed only the old clean fixture. Select All Shown selected only that row. Its review included Repository content classification, consequences, safety-ref semantics, and disabled permanent action until acknowledgment. Cancelled without mutation.
+- With any age, bulk selection selected the two clean fixtures and skipped the dirty and ignored-file fixtures (2 added, 2 skipped). Clear Selection emptied the global selection. Filtering developer storage by App functionality & settings hid the rebuildable dependency fixture, correctly yielding no matches.
+- Native dark-mode screenshot confirmed the filter/selection rows and worktree explanation fit the standard 1180×760 window. No user-storage cleanup was performed. Temporary Dev custom roots and scan cache were cleared, and the Dev build was quit.
+- Classification is a deterministic consequence estimate, not proof that third-party software cannot be affected. Worktree activity uses filesystem/Git modifications, not provider session or last-opened guarantees. Existing force-removal, data-loss, APFS, platform-matrix and process-detection limits remain as documented above.

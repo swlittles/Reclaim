@@ -38,6 +38,7 @@ public struct Measurement: Codable, Equatable {
     public var complete: Bool = true
     public var fingerprint: Fingerprint?
     public var warning: String?
+    public var latestModified: Date?
     public init() {}
 }
 public struct Finding: Identifiable, Codable, Hashable {
@@ -53,6 +54,27 @@ public struct Finding: Identifiable, Codable, Hashable {
     public var git: Worktree?
     public var docker: DockerTarget?
     public var selectable: Bool { blockedReason == nil && action != .reportOnly && measurement.complete }
+    public var impact: ImpactAssessment { ImpactAssessment.classify(self) }
+    /// Worktree age is based on observed content and Git activity, never commit author dates.
+    public var ageReference: Date? {
+        guard category == .worktrees else { return modified }
+        guard measurement.complete, let latest = measurement.latestModified else { return nil }
+        return max(latest, git?.metadataModified ?? latest)
+    }
+    public func olderThan(days: Int, now: Date = Date()) -> Bool {
+        days == 0 || (ageReference.map { now.timeIntervalSince($0) >= Double(days) * 86_400 } ?? false)
+    }
+    /// Normalize older cached scans too: the strongest same-path protection wins.
+    public static func coalesced(_ findings: [Finding]) -> [Finding] {
+        var result: [Finding] = [], indices: [String: Int] = [:]
+        for f in findings {
+            if let index = indices[f.path] {
+                let prior = result[index]
+                if prior.action != .reportOnly && (f.action == .reportOnly || (prior.selectable && !f.selectable)) { result[index] = f }
+            } else { indices[f.path] = result.count; result.append(f) }
+        }
+        return result
+    }
     public init(path: String, name: String? = nil, category: Category, detail: String, measurement: Measurement = Measurement(), modified: Date? = nil, action: CleanupAction = .trash, blockedReason: String? = nil, git: Worktree? = nil, docker: DockerTarget? = nil) {
         self.path = path; self.name = name ?? URL(fileURLWithPath: path).lastPathComponent
         self.category = category; self.detail = detail; self.measurement = measurement; self.modified = modified
@@ -75,6 +97,8 @@ public struct Worktree: Codable {
     public var ownerHint: String = "Git"
     public var upstream: String?
     public var reachability: String = "Local references only; remote-tracking refs may be stale."
+    public var metadataModified: Date?
+    public var ignoredExamples: [String]?
     public var canRemove: Bool { blockers.isEmpty && !main && !bare }
 }
 public struct DockerTarget: Codable, Equatable {

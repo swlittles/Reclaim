@@ -5,6 +5,16 @@
 
 Reclaim is a native menu-bar storage utility for developers. Review everyday clutter, find build artifacts, and see Git worktrees across project folders, agent worktree locations, custom paths, and mounted disks. Cleanup is always a reviewed choice.
 
+### Review by impact, age, and eligibility
+
+Every finding has an **impact classification**, independent from whether it is currently **Protected**: cache (lower risk), logs/diagnostics, rebuild/reinstall needed, app functionality/settings, personal data, repository content, tool-managed storage, or unknown impact. Filter with **Impact** and select a row for the rule evidence and expected consequence. Rules cannot prove that a third-party app does not reference a file. Cache cleanup can remove offline data; app settings/databases are never labeled disposable just because they are old or large.
+
+**Select All Shown** selects eligible items under the current filters and preserves existing selections elsewhere. It skips excluded/protected items, overlapping paths, and the last known copy of each content-verified duplicate group. **Clear Selection** clears all selected items across pages. The final review still shows each path, consequence, and irreversible action.
+
+**Worktrees** defaults to linked worktrees. Use **Type** to inspect main repositories separately. Quick Scan checks existing `~/.t3/worktrees`, `~/.codex/worktrees`, `~/.cursor/worktrees`, and home Claude candidates, plus project roots; repository-local `.claude/worktrees` folders are found within those roots. Git registrations reveal other linked paths even outside the search roots. Inherited absolute `CODEX_HOME` and `CLAUDE_CONFIG_DIR` add `/worktrees` candidates; Finder launches may not inherit shell variables, so use **Add Folder** for custom locations. The discovery disclosure reports candidates and missing folders; it does not claim every tool uses every candidate.
+
+Choose **Age → 14+ days (2 weeks)** or **Custom days** to narrow old worktrees. Worktree age is the newest observed modification anywhere in its measured contents or Git HEAD/index/HEAD log, not a commit date or last-opened guarantee. Old cached scans without this evidence need a rescan; incomplete or unknown worktree ages do not match age filters. Age never overrides dirty/ignored/locked/active/missing-path protection.
+
 **[Download Reclaim for macOS](https://github.com/swlittles/Reclaim/releases/latest)** · [All releases](https://github.com/swlittles/Reclaim/releases) · [Source](https://github.com/swlittles/Reclaim)
 
 Stable downloads are universal (Apple Silicon and Intel), signed with Developer ID, notarized by Apple, and include verified Sparkle updates. Open the DMG, drag **Reclaim** into **Applications**, then launch it from Applications. No Accessibility permission is required. Full Disk Access is optional for broader scan coverage.

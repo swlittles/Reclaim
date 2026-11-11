@@ -58,7 +58,7 @@ struct MainView: View {
     }
     var subtitle: String {
         switch model.page {
-        case .worktrees: return "Every repository. Every linked location. Your work protected."
+        case .worktrees: return "Linked worktrees across tools and locations. Main repositories stay protected."
         case .developer: return "Build artifacts, package caches, containers, and virtual disks."
         case .duplicates: return "Compare content on demand. Keep the copies that matter."
         case .volumes: return "Mounted disks and shared capacity. Inventory only."
@@ -161,19 +161,26 @@ struct FindingsView: View {
     @State private var eligibility = 0
     @State private var ageDays = 0
     @State private var minBytes: Int64 = 0
+    @State private var classification = "All classifications"
+    @State private var worktreeScope = 1
+    @State private var customAgeDays = 14
+    @State private var showClassificationHelp = false
+    var effectiveAgeDays: Int { ageDays == -1 ? max(1, customAgeDays) : ageDays }
+    var linked: [Finding] { model.findings.filter { $0.category == .worktrees && $0.git?.main == false } }
     var visible: [Finding] {
         let items = model.findings.filter { f in
             let matches: Bool
             switch model.page {
-            case .worktrees: matches = f.category == .worktrees
+            case .worktrees: matches = f.category == .worktrees && (worktreeScope == 0 || (worktreeScope == 1 ? f.git?.main == false : f.git?.main == true))
             case .developer: matches = [.developer, .containers, .virtualDisks].contains(f.category)
             case .largeFiles: matches = [.largeFiles, .downloads, .backups].contains(f.category)
             case .applications: matches = f.category == .applications
             default: matches = ![.worktrees, .containers, .virtualDisks, .applications].contains(f.category)
             }
-            let eligible = eligibility == 0 || (eligibility == 1 ? f.selectable : !f.selectable)
-            let age = ageDays == 0 || (f.modified.map { Date().timeIntervalSince($0) >= Double(ageDays) * 86400 } ?? false)
-            return matches && eligible && age && f.measurement.allocated >= minBytes && (model.search.isEmpty || (f.path + f.detail + f.name).localizedCaseInsensitiveContains(model.search))
+            let selectable = f.selectable && !model.settings.exclusions.contains(where: { isWithin(f.path, $0) })
+            let eligible = eligibility == 0 || (eligibility == 1 ? selectable : !selectable)
+            let impact = classification == "All classifications" || f.impact.classification.rawValue == classification
+            return matches && eligible && impact && f.olderThan(days: effectiveAgeDays) && f.measurement.allocated >= minBytes && (model.search.isEmpty || (f.path + f.detail + f.name + (f.git?.ownerHint ?? "")).localizedCaseInsensitiveContains(model.search))
         }
         return items.sorted { largestFirst ? $0.measurement.allocated > $1.measurement.allocated : $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
@@ -186,11 +193,32 @@ struct FindingsView: View {
             }.padding(14).background(Color(nsColor: .controlBackgroundColor))
             HStack(spacing: 12) {
                 Picker("Show", selection: $eligibility) { Text("All items").tag(0); Text("Eligible").tag(1); Text("Protected").tag(2) }.frame(width: 150)
-                Picker("Age", selection: $ageDays) { Text("Any age").tag(0); Text("30+ days").tag(30); Text("90+ days").tag(90) }.frame(width: 150)
+                Picker("Age", selection: $ageDays) { Text("Any age").tag(0); Text("7+ days").tag(7); Text("14+ days (2 weeks)").tag(14); Text("30+ days").tag(30); Text("90+ days").tag(90); Text("Custom days…").tag(-1) }.frame(width: 190)
+                if ageDays == -1 { TextField("Days", value: $customAgeDays, format: .number).textFieldStyle(.roundedBorder).frame(width: 55).help("Minimum age in days, at least 1.") }
                 Picker("Size", selection: $minBytes) { Text("Any size").tag(Int64(0)); Text("100 MB+").tag(Int64(100_000_000)); Text("1 GB+").tag(Int64(1_000_000_000)) }.frame(width: 145)
                 Spacer()
                 Text("\(visible.count) items").font(.caption).foregroundStyle(.secondary)
             }.padding(.horizontal, 14).padding(.vertical, 10)
+            HStack(spacing: 12) {
+                Picker("Impact", selection: $classification) {
+                    Text("All classifications").tag("All classifications")
+                    ForEach(ImpactClass.allCases) { value in Text(value.rawValue).tag(value.rawValue) }
+                }.frame(width: 265)
+                Button { showClassificationHelp.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(.plain).help("How impact classifications work")
+                    .popover(isPresented: $showClassificationHelp) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Classification describes likely impact").font(.headline)
+                            Text("Rules use the storage location, Git metadata, and artifact evidence. They do not prove a file is unused. Third-party apps can reference arbitrary paths; even cache removal can affect offline content.")
+                            Text("Protected describes whether cleanup is allowed now. A lower-risk cache can still be protected because its owner is running. Select a row to see the evidence and expected consequence.")
+                        }.font(.callout).padding(20).frame(width: 360)
+                    }
+                Spacer()
+                Button("Select All Shown") { model.selectAllVisible(visible) }.disabled(model.busy || visible.isEmpty)
+                    .help("Select eligible items in the current filters. Skip exclusions, overlaps, and the last known copy of a duplicate.")
+                Button("Clear Selection") { model.clearSelection() }.disabled(model.busy || model.selected.isEmpty)
+            }.padding(.horizontal, 14).padding(.bottom, 10)
+            if let note = model.selectionNote { Text(note).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 8) }
+            if model.page == .worktrees { worktreeInfo }
             if model.page == .developer {
                 HStack { Text("Shared stores, simulator devices, and VM images are inventory only.").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Tool Checks…") { model.checkTools() }.disabled(model.busy) }.padding(12)
             }
@@ -214,6 +242,27 @@ struct FindingsView: View {
             }
         }
     }
+    private var worktreeInfo: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Picker("Type", selection: $worktreeScope) { Text("Linked worktrees").tag(1); Text("Main repositories").tag(2); Text("All Git locations").tag(0) }.frame(width: 235)
+                Spacer()
+                Text("\(linked.count) linked · \(linked.filter(\.selectable).count) eligible · \(linked.filter { !$0.selectable }.count) protected").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Main repositories are never removed here. Linked worktrees with local changes, ignored files (including build output or .env), locks, active processes, or missing paths stay protected.").font(.caption).foregroundStyle(.secondary)
+            if effectiveAgeDays > 0 {
+                Text("Age uses the newest observed modification in the worktree or its Git HEAD, index, and HEAD log. It is not a last-opened date. Unknown or incomplete ages are excluded; age never overrides protection. Rescan for current activity.").font(.caption).foregroundStyle(.secondary)
+            }
+            DisclosureGroup("Worktree discovery locations") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(StorageScanner.worktreeLocations(home: FileManager.default.homeDirectoryForCurrentUser.path), id: \.path) { location in
+                        Text("\(location.name): \(location.path)\(FileManager.default.fileExists(atPath: location.path) ? "" : " (not present)")").font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    Text("Claude Code repository-local .claude/worktrees folders are discovered inside project roots. Git's registrations also reveal linked paths outside these folders. Add Folder covers custom tool homes, alternate locations, and mounted disks. Missing registrations remain protected; this is not a guarantee of whole-disk coverage.").font(.caption).foregroundStyle(.secondary)
+                }.padding(.top, 6)
+            }.font(.caption)
+        }.padding(.horizontal, 14).padding(.bottom, 10)
+    }
 }
 struct FindingRow: View {
     @ObservedObject var model: AppModel
@@ -226,6 +275,7 @@ struct FindingRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack { Text(finding.name).font(.system(size: 13, weight: .medium)).lineLimit(1); if finding.git?.main == true { pill("MAIN", color: .secondary) }; if excluded { pill("EXCLUDED", color: .orange) } }
                 Text(finding.path).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text(finding.impact.classification.rawValue).font(.caption2).foregroundStyle(impactColor(finding.impact.classification))
                 Text(finding.blockedReason == nil ? finding.action.label : "Protected · " + (finding.blockedReason?.components(separatedBy: "\n").first ?? "")).font(.caption2).foregroundStyle(finding.blockedReason == nil ? Color.secondary : Color.orange).lineLimit(1)
             }
             Spacer(minLength: 4)
@@ -246,12 +296,18 @@ struct InspectorView: View {
                 Image(systemName: finding.category.symbol).font(.largeTitle).foregroundStyle(accent)
                 Text(finding.name).font(.headline).textSelection(.enabled)
                 Text(finding.detail).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                detail("IMPACT CLASSIFICATION", finding.impact.classification.rawValue)
+                Text(finding.impact.evidence).font(.caption).foregroundStyle(.secondary)
+                Text(finding.impact.consequence).font(.caption).textSelection(.enabled)
                 Divider()
                 detail("LOCATION", finding.path)
                 detail("ACTION", finding.action.label)
                 if finding.docker == nil { detail("ALLOCATED / LOGICAL", "~\(bytes(finding.measurement.allocated)) / \(bytes(finding.measurement.logical))"); detail("FILES", String(finding.measurement.files)) }
                 if let date = finding.modified { detail("MODIFIED", date.formatted(date: .abbreviated, time: .shortened)) }
                 if let w = finding.git {
+                    detail("LOCATION HINT", w.ownerHint + " · inferred from path, not proof of ownership")
+                    detail("LAST OBSERVED ACTIVITY", finding.ageReference?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown · rescan for content and Git activity")
+                    if let examples = w.ignoredExamples, !examples.isEmpty { detail("IGNORED FILE EXAMPLES (UP TO 5)", examples.joined(separator: "\n")) }
                     let artifacts = FileSystem.nonoverlapping(model.findings.filter { $0.category == .developer && $0.path != finding.path && isWithin($0.path, finding.path) }).reduce(Int64(0)) { $0 + $1.measurement.allocated }
                     detail("BUILD / DEPENDENCY ALLOCATION", "~" + bytes(artifacts))
                     detail("OTHER WORKTREE ALLOCATION", "~" + bytes(max(0, finding.measurement.allocated - artifacts)))
@@ -283,6 +339,8 @@ struct ReviewView: View {
                             Text(f.name).font(.headline)
                             Text(f.path).font(.caption.monospaced()).textSelection(.enabled)
                             Text(f.action.label).font(.caption).foregroundStyle(f.action.irreversible ? .orange : accent)
+                            Text(f.impact.classification.rawValue).font(.caption).foregroundStyle(impactColor(f.impact.classification))
+                            Text(f.impact.consequence).font(.caption).foregroundStyle(.secondary)
                             if f.action == .worktree { Text("Git removes this folder permanently. A new safety ref preserves HEAD; branches remain. Local files are not backed up.").font(.caption).foregroundStyle(.secondary) }
                             if f.action == .dockerVolume { Text("Volume data, including databases, is permanently lost. Unattached does not mean unused.").font(.caption).foregroundStyle(.orange) }
                         }
@@ -343,6 +401,13 @@ struct DuplicatesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { Text("Content hashing reads files in project and custom roots. It skips dependency caches, links, and cloud-only placeholders.").font(.callout).foregroundStyle(.secondary); Spacer(); Button("Find Duplicates") { model.findDuplicates() }.disabled(model.busy) }
+            if !model.duplicates.isEmpty {
+                HStack {
+                    Button("Select All But One per Group") { model.selectAllVisible(model.findings.filter { f in model.duplicates.contains { $0.paths.contains(f.path) } }) }.disabled(model.busy)
+                    Button("Clear Selection") { model.clearSelection() }.disabled(model.busy || model.selected.isEmpty)
+                }
+                if let note = model.selectionNote { Text(note).font(.caption).foregroundStyle(.secondary) }
+            }
             if !model.duplicateNotes.isEmpty { DisclosureGroup("Partial search · \(model.duplicateNotes.count) notes") { ForEach(Array(model.duplicateNotes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).foregroundStyle(.secondary) } } }
             if model.duplicates.isEmpty { EmptyState(symbol: "doc.on.doc", title: model.hashComplete ? "No duplicates found" : "Compare files when you need to", detail: "Files are grouped by size and verified with SHA-256. At least one copy in each group must stay.") {} }
             else {
@@ -365,7 +430,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Scan locations") {
-                Text("Common developer locations are included in Quick Scan. Add arbitrary repository/worktree parents or a mounted volume. Git metadata expands each discovered repository family across locations.").font(.callout).foregroundStyle(.secondary)
+                Text("Quick Scan includes existing project roots and T3 Code, Codex, Claude Code, and Cursor worktree candidates. Repository-local .claude/worktrees folders are discovered inside project roots. Git metadata expands each discovered family across locations. Add custom tool homes or a mounted volume below.").font(.callout).foregroundStyle(.secondary)
                 ForEach(model.roots, id: \.self) { root in HStack { Text(root).font(.caption.monospaced()).textSelection(.enabled); Spacer(); if model.settings.roots.contains(root) { Button("Remove") { model.settings.roots.removeAll { $0 == root } } } } }
                 Button("Add Folder…") { model.addRoot() }
             }
@@ -411,3 +476,10 @@ struct EmptyState: View {
 }
 private extension View { func card() -> some View { self.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(Color.primary.opacity(0.06), lineWidth: 1)) } }
 private func pill(_ text: String, color: Color) -> some View { Text(text).font(.system(size: 8, weight: .bold)).padding(.horizontal, 5).padding(.vertical, 3).background(color.opacity(0.12), in: Capsule()).foregroundStyle(color) }
+private func impactColor(_ classification: ImpactClass) -> Color {
+    switch classification {
+    case .cache, .diagnostics: return accent
+    case .application, .personal, .unknown: return .orange
+    default: return .secondary
+    }
+}

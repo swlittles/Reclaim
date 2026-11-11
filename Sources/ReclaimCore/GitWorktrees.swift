@@ -55,22 +55,27 @@ public final class GitService {
         if w.bare { w.blockers.append("Bare repository; protected."); return w }
         if w.locked != nil { w.blockers.append("Locked worktree: \(w.locked ?? "")") }
         if w.prunable != nil { w.blockers.append("Missing or stale registration; inventory only. Offline volumes must not be pruned.") }
+        let components = URL(fileURLWithPath: w.path).pathComponents
+        for (folder, owner) in [(".t3", "T3 Code location"), (".codex", "Codex location"), (".claude", "Claude Code location"), (".cursor", "Cursor location")] {
+            if let index = components.firstIndex(of: folder), components.dropFirst(index + 1).first == "worktrees" { w.ownerHint = owner; break }
+        }
         guard FileManager.default.fileExists(atPath: w.path) else { w.blockers.append("Worktree path is missing, inaccessible, or on an offline volume."); return w }
-        let lower = w.path.lowercased()
-        if lower.contains("/.codex/") { w.ownerHint = "Codex location" }
-        else if lower.contains("/.cursor/") { w.ownerHint = "Cursor location" }
-        else if lower.contains("/.claude/") { w.ownerHint = "Claude location" }
-        else if lower.contains("/t3") { w.ownerHint = "Possible T3 location" }
         do {
             let status = try command(["status", "--porcelain=v2", "-z", "--untracked-files=all"], at: w.path, token: token)
             guard status.code == 0 else { throw ReclaimError.refused("Cannot determine working tree status.") }
             w.status = status.output
-            if !status.data.isEmpty { w.blockers.append("Contains changes, untracked files, conflicts, or submodule changes.") }
+            if !status.data.isEmpty { w.blockers.append("Contains tracked changes, untracked files, conflicts, or submodule changes. Commit or preserve this work before removal.") }
             let ignored = try command(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], at: w.path, token: token)
             guard ignored.code == 0 else { throw ReclaimError.refused("Cannot inspect ignored files.") }
-            if !ignored.data.isEmpty { w.blockers.append("Contains ignored files; these may include .env files, data, or credentials.") }
+            let ignoredPaths = ignored.output.split(separator: "\0").map(String.init)
+            w.ignoredExamples = Array(ignoredPaths.prefix(5))
+            if !ignoredPaths.isEmpty { w.blockers.append("Contains \(ignoredPaths.count) ignored files; these may include build output, .env files, data, or credentials. Review them before removal.") }
             if FileManager.default.fileExists(atPath: w.path + "/.gitmodules") { w.blockers.append("Contains submodules; automatic worktree removal is disabled.") }
             let gitDir = try required(["rev-parse", "--absolute-git-dir"], at: w.path, token: token)
+            // Activity inside a linked worktree does not necessarily change its root directory mtime.
+            w.metadataModified = ["HEAD", "index", "logs/HEAD"].compactMap { marker in
+                (try? FileManager.default.attributesOfItem(atPath: gitDir + "/" + marker)[.modificationDate]) as? Date
+            }.max()
             for marker in ["index.lock", "HEAD.lock", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-apply", "rebase-merge"] {
                 if FileManager.default.fileExists(atPath: gitDir + "/" + marker) { w.blockers.append("Git operation or lock present: \(marker)") }
             }

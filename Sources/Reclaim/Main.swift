@@ -100,7 +100,7 @@ import ReclaimCore
     @objc func settings() { model.page = .settings; openWindow() }
     @objc func cancel() { model.token.cancel() }
     @objc func update() { model.updates.check() }
-    @objc func about() { NSApp.activate(ignoringOtherApps: true); NSApp.orderFrontStandardAboutPanel(options: [.applicationName: AppIdentity.name, .applicationVersion: "0.1.0", .credits: NSAttributedString(string: "Storage cleanup for developers.\nMIT licensed · Local-first · No analytics")]) }
+    @objc func about() { NSApp.activate(ignoringOtherApps: true); NSApp.orderFrontStandardAboutPanel(options: [.applicationName: AppIdentity.name, .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development", .credits: NSAttributedString(string: "Storage cleanup for developers.\nMIT licensed · Local-first · No analytics")]) }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if model.cleaning { model.token.cancel(); model.errorMessage = "Cleanup will stop after the current item. Quit again when it has finished."; openWindow(); return .terminateCancel }

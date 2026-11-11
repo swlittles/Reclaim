@@ -40,6 +40,103 @@ final class FakeTrash: TrashManaging {
 }
 final class CoreTests {
     let quiet = ActivitySnapshot(paths: [])
+    func testImpactRulesDistinguishAppStateCachesAndUnknownData() throws {
+        func finding(_ path: String, _ category: ReclaimCore.Category = .largeFiles, action: CleanupAction = .trash) -> Finding {
+            Finding(path: path, category: category, detail: "fixture", action: action)
+        }
+        XCTAssertEqual(finding("/Users/test/Library/Caches/com.vendor.App", .caches).impact.classification, .cache)
+        XCTAssertEqual(finding("/Users/test/Library/Caches/pip", .developer, action: .reportOnly).impact.classification, .managed)
+        XCTAssertEqual(finding("/Users/test/Library/Application Support/ThirdParty/database.sqlite").impact.classification, .application)
+        XCTAssertEqual(finding("/Users/test/Library/Group Containers/vendor/data").impact.classification, .application)
+        XCTAssertEqual(finding("/Applications/ThirdParty.app/Contents/Resources/cache.dat").impact.classification, .application)
+        XCTAssertEqual(finding("/Users/test/Library/Preferences/com.vendor.App.plist", .applications).impact.classification, .application)
+        XCTAssertEqual(finding("/Users/test/Library/Logs/vendor/log", .logs).impact.classification, .diagnostics)
+        XCTAssertEqual(finding("/Users/test/project/target", .developer).impact.classification, .rebuild)
+        XCTAssertEqual(finding("/Users/test/project/target").impact.classification, .unknown)
+        XCTAssertEqual(finding("/Users/test/Downloads/important.mp4", .downloads).impact.classification, .personal)
+        XCTAssertEqual(finding("/Users/test/Library/Application Support/MobileSync/Backup/device", .backups).impact.classification, .personal)
+        XCTAssertEqual(finding("/Users/test/Documents/linked-database.bin").impact.classification, .unknown)
+        var blockedCache = finding("/Users/test/Library/Caches/com.vendor.App", .caches)
+        blockedCache.blockedReason = "Owner is running"
+        XCTAssertEqual(blockedCache.impact.classification, .cache)
+        XCTAssertFalse(blockedCache.selectable)
+    }
+    func testBulkSelectionRespectsFiltersExclusionsOverlapAndDuplicateRetention() throws {
+        func finding(_ path: String, blocked: String? = nil) -> Finding {
+            Finding(path: path, category: .largeFiles, detail: "fixture", blockedReason: blocked)
+        }
+        let parent = finding("/fixture/project"), child = finding("/fixture/project/output"), alias = Finding(path: child.path, category: .developer, detail: "same path")
+        let protected = finding("/fixture/blocked", blocked: "locked"), excluded = finding("/fixture/excluded/data")
+        let a = finding("/fixture/duplicate/a"), b = finding("/fixture/duplicate/b"), hidden = finding("/fixture/hidden")
+        let all = [parent, child, alias, protected, excluded, a, b, hidden]
+        let result = SelectionPolicy.select(visible: Array(all.dropLast()), all: all, selected: [], exclusions: ["/fixture/excluded"], duplicatePaths: [[a.path, b.path]])
+        XCTAssertEqual(result.selection.count, 2)
+        XCTAssertFalse(result.selection.contains(parent.id)); XCTAssertFalse(result.selection.contains(protected.id))
+        XCTAssertFalse(result.selection.contains(excluded.id)); XCTAssertFalse(result.selection.contains(hidden.id))
+        XCTAssertEqual([a, b].filter { result.selection.contains($0.id) }.count, 1)
+        let selected = all.filter { result.selection.contains($0.id) }
+        _ = try CleanupPlan(findings: selected, exclusions: ["/fixture/excluded"])
+        let retained = SelectionPolicy.select(visible: [parent], all: all, selected: [child.id, hidden.id], exclusions: [])
+        XCTAssertEqual(retained.selection, Set([child.id, hidden.id]))
+        // Existing selections covering another copy must also keep one known copy.
+        let copies = SelectionPolicy.select(visible: [a], all: all, selected: [b.id], exclusions: [], duplicatePaths: [[a.path, b.path]])
+        XCTAssertEqual(copies.selection, Set([b.id]))
+    }
+    func testWorktreeAgeUsesNewestContentAndGitActivityAndRejectsUnknownAge() throws {
+        let f = try Fixture(); try f.repository(); try f.worktree()
+        let path = f.path("outside/linked")
+        let git = GitService(), input = try XCTUnwrap(git.family(at: path).first { !$0.main })
+        let old = Date().addingTimeInterval(-30 * 86_400)
+        for file in [path + "/README", path + "/.git", path] {
+            try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file)
+        }
+        let m = FileSystem.measure(path)
+        XCTAssertTrue(m.complete)
+        let recentGit = git.inspect(input, activity: quiet)
+        var finding = Finding(path: path, category: .worktrees, detail: "fixture", measurement: m, modified: old, action: .worktree, git: recentGit)
+        XCTAssertFalse(finding.olderThan(days: 14)) // New Git index/HEAD wins over old root mtime.
+        var oldGit = recentGit; oldGit.metadataModified = old
+        finding.git = oldGit
+        XCTAssertTrue(finding.olderThan(days: 14))
+        try f.file("outside/linked/nested/recent.txt")
+        // Even if the root timestamp is old, a recent nested file must prevent stale classification.
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: path)
+        finding.measurement = FileSystem.measure(path)
+        XCTAssertFalse(finding.olderThan(days: 14))
+        finding.measurement.complete = false
+        XCTAssertFalse(finding.olderThan(days: 14))
+        XCTAssertTrue(finding.olderThan(days: 0))
+        finding.measurement = Measurement()
+        XCTAssertFalse(finding.olderThan(days: 14))
+    }
+    func testToolLocationsAndRepositoryLocalClaudeDiscovery() throws {
+        let f = try Fixture(); try f.repository(); try f.worktree("repo/.claude/worktrees/task")
+        let roots = StorageScanner.worktreeLocations(home: f.root.path, environment: ["CODEX_HOME": f.path("custom-codex"), "CLAUDE_CONFIG_DIR": f.path("custom-claude")])
+        XCTAssertTrue(roots.contains { $0.path == f.path(".t3/worktrees") })
+        XCTAssertTrue(roots.contains { $0.path == f.path("custom-codex/worktrees") })
+        XCTAssertTrue(roots.contains { $0.path == f.path("custom-claude/worktrees") })
+        let scan = StorageScanner().scan(ScanOptions(home: f.root.path, roots: [f.path("repo")], includeSystemLocations: false))
+        let claude = try XCTUnwrap(scan.findings.first { $0.path == f.path("repo/.claude/worktrees/task") })
+        XCTAssertEqual(claude.git?.ownerHint, "Claude Code location")
+        XCTAssertEqual(scan.findings.filter { $0.category == .worktrees && $0.git?.main == false }.count, 1)
+    }
+    func testSharedStoreCannotAlsoBeSelectedAsGenericCache() throws {
+        let f = try Fixture(); try f.file("Library/Caches/pip/cache.bin")
+        let scan = StorageScanner().scan(ScanOptions(home: f.root.path, toolOverrides: ["docker": "/nonexistent-fixture-docker"], applicationRoots: []))
+        let pip = scan.findings.filter { $0.path == f.path("Library/Caches/pip") }
+        XCTAssertEqual(pip.count, 1)
+        XCTAssertEqual(pip.first?.action, .reportOnly)
+        XCTAssertFalse(pip.first?.selectable ?? true)
+        XCTAssertEqual(pip.first?.impact.classification, .managed)
+        let generic = Finding(path: f.path("Library/Caches/pip"), category: .caches, detail: "generic")
+        let protected = try XCTUnwrap(pip.first)
+        XCTAssertEqual(Finding.coalesced([generic, protected]).first?.action, .reportOnly)
+        XCTAssertEqual(Finding.coalesced([protected, generic]).first?.action, .reportOnly)
+        // Additive optional fields keep previously saved scans readable.
+        let data = Data("{\"path\":\"/tmp/fixture\",\"name\":\"fixture\",\"category\":\"Worktrees\",\"detail\":\"old scan\",\"measurement\":{\"logical\":0,\"allocated\":0,\"files\":0,\"complete\":true},\"action\":\"worktree\"}".utf8)
+        let legacy = try JSONDecoder().decode(Finding.self, from: data)
+        XCTAssertFalse(legacy.olderThan(days: 14))
+    }
     func testNULParserPreservesUnusualPaths() throws {
         let path = "/Users/test/with tabs\tand\nnewlines café"
         let data = Data("worktree /main\0HEAD abc\0branch refs/heads/main\0\0worktree \(path)\0HEAD def\0detached\0locked keep\0\0".utf8)
@@ -232,6 +329,11 @@ func XCTUnwrap<T>(_ value: T?) throws -> T { guard let value else { throw Reclai
     static func main() {
         let suite = CoreTests()
         let tests: [(String, () throws -> Void)] = [
+            ("testImpactRulesDistinguishAppStateCachesAndUnknownData", suite.testImpactRulesDistinguishAppStateCachesAndUnknownData),
+            ("testBulkSelectionRespectsFiltersExclusionsOverlapAndDuplicateRetention", suite.testBulkSelectionRespectsFiltersExclusionsOverlapAndDuplicateRetention),
+            ("testWorktreeAgeUsesNewestContentAndGitActivityAndRejectsUnknownAge", suite.testWorktreeAgeUsesNewestContentAndGitActivityAndRejectsUnknownAge),
+            ("testToolLocationsAndRepositoryLocalClaudeDiscovery", suite.testToolLocationsAndRepositoryLocalClaudeDiscovery),
+            ("testSharedStoreCannotAlsoBeSelectedAsGenericCache", suite.testSharedStoreCannotAlsoBeSelectedAsGenericCache),
             ("testNULParserPreservesUnusualPaths", suite.testNULParserPreservesUnusualPaths),
             ("testWorktreeFamilyExpandsBeyondRootAndKeepsBranchOnRemoval", suite.testWorktreeFamilyExpandsBeyondRootAndKeepsBranchOnRemoval),
             ("testMainDirtyIgnoredLockedAndChangedHEADAreProtected", suite.testMainDirtyIgnoredLockedAndChangedHEADAreProtected),

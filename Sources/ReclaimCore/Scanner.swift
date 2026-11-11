@@ -8,16 +8,27 @@ public struct ScanOptions {
     public var includeSystemLocations: Bool
     public var largeFileThreshold: Int64
     public var toolOverrides: [String: String]
-    public init(home: String = FileManager.default.homeDirectoryForCurrentUser.path, roots: [String] = [], exclusions: [String] = [], deep: Bool = false, includeSystemLocations: Bool = true, largeFileThreshold: Int64 = 500_000_000, toolOverrides: [String: String] = [:]) {
+    public var applicationRoots: [String]?
+    public init(home: String = FileManager.default.homeDirectoryForCurrentUser.path, roots: [String] = [], exclusions: [String] = [], deep: Bool = false, includeSystemLocations: Bool = true, largeFileThreshold: Int64 = 500_000_000, toolOverrides: [String: String] = [:], applicationRoots: [String]? = nil) {
         self.home = home; self.roots = roots; self.exclusions = exclusions; self.deep = deep
         self.includeSystemLocations = includeSystemLocations; self.largeFileThreshold = largeFileThreshold; self.toolOverrides = toolOverrides
+        self.applicationRoots = applicationRoots
     }
 }
 public final class StorageScanner {
     public let token: CancellationToken
     public init(token: CancellationToken = CancellationToken()) { self.token = token }
     public static func defaultRoots(home: String) -> [String] {
-        ["Projects", "Developer", "Development", "Code", "src", ".codex/worktrees", ".cursor/worktrees", ".claude/worktrees", ".t3/worktrees"].map { home + "/" + $0 }.filter { FileManager.default.fileExists(atPath: $0) }
+        let projects = ["Projects", "Developer", "Development", "Code", "src"].map { home + "/" + $0 }
+        return Array(Set(projects + worktreeLocations(home: home).map(\.path))).sorted().filter { FileManager.default.fileExists(atPath: $0) }
+    }
+    public static func worktreeLocations(home: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> [(name: String, path: String)] {
+        var locations = [("T3 Code", home + "/.t3/worktrees"), ("Codex", home + "/.codex/worktrees"), ("Claude Code (home candidate)", home + "/.claude/worktrees"), ("Cursor", home + "/.cursor/worktrees")]
+        for (name, variable) in [("Codex (CODEX_HOME)", "CODEX_HOME"), ("Claude Code (CLAUDE_CONFIG_DIR)", "CLAUDE_CONFIG_DIR")] {
+            if let base = environment[variable], base.hasPrefix("/") { locations.append((name, FileSystem.normalized(base) + "/worktrees")) }
+        }
+        var seen = Set<String>()
+        return locations.filter { seen.insert($0.1).inserted }
     }
     public func scan(_ options: ScanOptions, progress: @escaping (String, [Finding]) -> Void = { _, _ in }) -> ScanResult {
         var result = ScanResult(), seen = Set<String>(), repos = Set<String>(), families = Set<String>()
@@ -26,7 +37,17 @@ public final class StorageScanner {
         let git = GitService(executable: ToolLocator.find("git", overrides: options.toolOverrides) ?? "/usr/bin/git")
         func excluded(_ p: String) -> Bool { options.exclusions.contains { isWithin(p, $0) } }
         func add(_ path: String, _ category: Category, _ detail: String, _ action: CleanupAction = .trash, blocked: String? = nil, worktree: Worktree? = nil) {
-            guard !token.isCancelled, !excluded(path), seen.insert(category.rawValue + ":" + path).inserted else { return }
+            guard !token.isCancelled, !excluded(path) else { return }
+            // A generic cache row must never bypass a more specific shared-store protection.
+            if !seen.insert(path).inserted {
+                if let index = result.findings.firstIndex(where: { $0.path == path }) {
+                    if action == .reportOnly {
+                        result.findings[index].action = action; result.findings[index].blockedReason = blocked
+                        result.findings[index].category = category; result.findings[index].detail = detail
+                    } else if category == .applications { result.findings[index].detail += " " + detail }
+                }
+                return
+            }
             var m = FileSystem.measure(path, token: token)
             if !fm.fileExists(atPath: path) { m.warning = "Missing or inaccessible path"; m.complete = false }
             let modified = (try? fm.attributesOfItem(atPath: path)[.modificationDate]) as? Date
@@ -49,7 +70,7 @@ public final class StorageScanner {
             children(options.home + "/Library/Developer/Xcode/Archives", .developer, "Xcode archive may be needed for distribution and symbolication; review carefully.")
             children(options.home + "/Library/Developer/Xcode/iOS DeviceSupport", .developer, "Xcode device support; may need downloading again.")
             children(options.home + "/Library/Application Support/MobileSync/Backup", .backups, "Device backup. May be the only copy of device data.")
-            for p in ["/Applications", options.home + "/Applications"] {
+            for p in options.applicationRoots ?? ["/Applications", options.home + "/Applications"] {
                 guard let apps = try? fm.contentsOfDirectory(atPath: p) else { continue }
                 for app in apps where app.hasSuffix(".app") {
                     let appPath = p + "/" + app

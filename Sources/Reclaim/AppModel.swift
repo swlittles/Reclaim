@@ -14,6 +14,7 @@ import UserNotifications
     @Published var focused: String?
     @Published var page: Page = .overview
     @Published var search = ""
+    @Published var selectionNote: String?
     @Published var busy = false
     @Published var cleaning = false
     @Published var status = "Ready to scan"
@@ -34,6 +35,7 @@ import UserNotifications
     init() {
         settings = LocalStore().read(ReclaimCore.Settings.self, from: "settings.json") ?? ReclaimCore.Settings()
         result = LocalStore().read(ScanResult.self, from: "scan.json")
+        if var saved = result { saved.findings = Finding.coalesced(saved.findings); result = saved }
         history = CleanupExecutor().history()
         updates.isCleaning = { [weak self] in self?.cleaning ?? false }
         updates.changed = { [weak self] in self?.objectWillChange.send() }
@@ -41,14 +43,21 @@ import UserNotifications
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in Task { @MainActor in self?.scheduledTick() } }
     }
     var findings: [Finding] { result?.findings ?? [] }
-    var eligibleSelection: [Finding] { findings.filter { selected.contains($0.id) && $0.selectable } }
+    var eligibleSelection: [Finding] { findings.filter { f in selected.contains(f.id) && f.selectable && !settings.exclusions.contains(where: { isWithin(f.path, $0) }) } }
+    func selectAllVisible(_ visible: [Finding]) {
+        guard !busy else { return }
+        let result = SelectionPolicy.select(visible: visible, all: findings, selected: selected, exclusions: settings.exclusions, duplicatePaths: duplicates.map(\.paths))
+        selected = result.selection
+        selectionNote = "\(result.added) added · \(result.skipped) skipped (protected, excluded, overlapping, or a retained duplicate)."
+    }
+    func clearSelection() { selected.removeAll(); selectionNote = nil }
     var selectedBytes: Int64 { FileSystem.nonoverlapping(eligibleSelection.filter { $0.docker == nil }).reduce(0) { $0 + $1.measurement.allocated } }
     var inventoryBytes: Int64 { FileSystem.nonoverlapping(findings.filter { $0.docker == nil }).reduce(0) { $0 + $1.measurement.allocated } }
     var startupVolume: VolumeInfo? { volumes.first(where: { $0.path == "/" }) ?? volumes.first }
     var roots: [String] { Array(Set(settings.roots + StorageScanner.defaultRoots(home: FileManager.default.homeDirectoryForCurrentUser.path))).sorted() }
     func scan(deep: Bool = false, targeted: Bool = false) {
         if targeted && settings.roots.isEmpty { errorMessage = "Add at least one custom folder before a targeted scan."; return }
-        guard !busy else { return }; busy = true; selected.removeAll(); duplicates = []; hashComplete = false; token = CancellationToken()
+        guard !busy else { return }; busy = true; selected.removeAll(); selectionNote = nil; duplicates = []; hashComplete = false; token = CancellationToken()
         status = deep ? "Searching accessible home folders…" : "Scanning storage…"
         let t = token, config = settings
         let options = ScanOptions(roots: config.roots, exclusions: config.exclusions, deep: deep, includeSystemLocations: !targeted, largeFileThreshold: config.largeFileThreshold, toolOverrides: config.toolOverrides)

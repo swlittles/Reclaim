@@ -1,5 +1,13 @@
 # Cleanup safety
 
+## Impact classifications and bulk selection
+
+Impact rules describe expected consequences using path conventions and scanner evidence; they are not a proof that arbitrary third-party software does not use a path. Cached data can include offline content or app-specific state. App bundles, preferences, saved state, sandbox/support folders, and Keychains are classified as affecting app functionality/settings, rather than as regenerable caches. Unknown files remain unknown; size, age, duplicate contents, and an absent process are not evidence that removal cannot break an app. Classification does not weaken eligibility, path validation, or final revalidation.
+
+Bulk selection applies only to visible findings, skips protected/excluded findings, keeps one known content-verified duplicate, and avoids parent/child or same-path overlaps. Existing selections outside the filters remain visible in the global selected count and final review; Clear Selection resets all of them. Generic cache and exact shared-store findings are coalesced to one path, with shared-store protection taking precedence.
+
+Worktree age is the newest observed filesystem modification across the complete measured tree and its Git HEAD/index/HEAD log. File access, open editor tabs, external references, restored timestamps, and provider session lifecycle cannot be reliably inferred from this timestamp. Unknown/incomplete evidence is excluded from nonzero age filters. A two-week threshold is a review aid, never permission to override a blocker. Main repositories are hidden by default on the linked-worktree list but remain protected in every view.
+
 Scanning is read-only; it does not fetch Git remotes, start Docker, prune data, or invoke root commands. Built-in tools are selected from system/Homebrew paths unless explicitly overridden. Commands receive literal argument arrays with noninteractive Git options and bounded time/output. Developer tools may themselves consult their own configuration.
 
 All selections start empty. A review fixes exact targets, fingerprints, actions and recovery semantics. Filesystem identity, full bounded metadata digest, ancestor identity, exclusions and activity are checked before execution, including another check after the journal is written. A changed or partially measured target is skipped. Overlapping parent/child selections and duplicate selections of a path are rejected. Root/system/volume roots and direct repository roots are protected. Explicit user-owned targets inside the current user’s canonical temporary directory can be reviewed; private system storage outside that exception stays protected. Tool-managed objects are removed through the owning tool, never recursive fallbacks.

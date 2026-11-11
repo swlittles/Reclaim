@@ -44,6 +44,8 @@ public enum FileSystem {
             }
             var seen = Set<String>(), digest = SHA256()
             for (p, s) in entries.sorted(by: { $0.0 < $1.0 }) {
+                let modified = Date(timeIntervalSince1970: Double(s.st_mtimespec.tv_sec) + Double(s.st_mtimespec.tv_nsec) / 1_000_000_000)
+                m.latestModified = max(m.latestModified ?? modified, modified)
                 let signature = "\(p)\u{0}\(identity(s)):\(s.st_size):\(s.st_mtimespec.tv_sec):\(s.st_mtimespec.tv_nsec):\(s.st_ctimespec.tv_sec):\(s.st_ctimespec.tv_nsec)\u{0}"
                 digest.update(data: Data(signature.utf8))
                 if seen.insert("\(s.st_dev):\(s.st_ino)").inserted {
