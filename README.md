@@ -5,7 +5,7 @@
 
 Reclaim is a native menu-bar storage utility for developers. Review everyday clutter, find build artifacts, and see Git worktrees across project folders, agent worktree locations, custom paths, and mounted disks. Cleanup is always a reviewed choice.
 
-**0.1.0 is a local development build. A public GitHub repository, signed stable downloads, and live update feed have not been published.**
+**Public source:** [swlittles/Reclaim](https://github.com/swlittles/Reclaim). The first signed release is being prepared; check [Releases](https://github.com/swlittles/Reclaim/releases) for published downloads.
 
 ## Use it
 
@@ -49,7 +49,7 @@ Local builds are **Reclaim Dev**, with a separate bundle ID, preferences, local 
 RECLAIM_UNIVERSAL=1 bash scripts/build.sh
 ```
 
-The release pipeline follows [Bustelo](https://github.com/swlittles/Bustelo) and [Snippet](https://github.com/swlittles/Snippet): universal app, Developer ID, hardened runtime, notarization/stapling, DMG, ZIP, checksums, signed Sparkle feed/archive, and gentle menu reminders. Stable release builds fail until a real Reclaim public update key and signing/notary configuration exist. Another app's update key is never reused.
+The release pipeline follows [Bustelo](https://github.com/swlittles/Bustelo) and [Snippet](https://github.com/swlittles/Snippet): universal app, Developer ID, hardened runtime, notarization/stapling, DMG, ZIP, checksums, signed Sparkle feed/archive, and gentle menu reminders. Reclaim has its own update-signing key. Apple signing and notarization use the same developer identity as the owner’s other Mac apps. Stable builds fail if required signing, notarization, or update configuration is missing.
 
 - [Development](docs/DEVELOPMENT.md)
 - [Architecture](docs/ARCHITECTURE.md)

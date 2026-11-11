@@ -1,13 +1,15 @@
 # Release engineering
 
-Publication is not configured yet. Repository/feed URLs target the proposed `swlittles/Reclaim` repository. No notarized stable release or real update round trip has been claimed.
+Repository: [swlittles/Reclaim](https://github.com/swlittles/Reclaim). Release and updater configuration was provisioned on 2026-11-10 using the owner's existing Apple Developer ID and notarization credentials from Bustelo, plus a fresh Reclaim Sparkle key. Private values are stored in GitHub Actions secrets, not this repository. The first release run must complete before a stable download or live appcast is available.
+
+The product-specific public key is committed in `Config/SparklePublicKey.txt`. Its private counterpart is stored in the local login Keychain under the Sparkle account `io.github.swlittles.Reclaim` and in the repository's `SPARKLE_ED_PRIVATE_KEY` secret. Do not replace this key for ordinary releases. The Apple credentials were transferred through a one-time encrypted artifact; the temporary source branch/workflow run/artifact and local transfer files were removed. Bustelo's default branch and its release configuration were not changed.
 
 The build and release pipeline adapts the owner's Bustelo/Snippet conventions: universal arm64/x86_64 app, macOS 13 minimum, Developer ID Application, hardened runtime, secure timestamp, notarized/stapled app and DMG, ZIP, SHA-256 checksums and signed Sparkle appcast/archive. Ad-hoc builds must never be labeled stable.
 
-## One-time configuration
+## One-time configuration (already completed for this repository)
 
 1. Create the GitHub repository when ready, add the remote, and review source/workflows before publishing.
-2. Generate a **new Reclaim** Sparkle Ed25519 signing key using the pinned Sparkle `generate_keys` tool. Keep its private key in a secure store, outside source/logs/chat. Export only the public 32-byte Base64 key to `Config/SparklePublicKey.txt`. The initially empty file intentionally blocks production builds. Never reuse a sibling app's key. `RECLAIM_SPARKLE_PUBLIC_KEY_FILE` can select a local public-key file for packaging checks.
+2. Generate a **new Reclaim** Sparkle Ed25519 signing key using the pinned Sparkle `generate_keys` tool. Keep its private key in a secure store, outside source/logs/chat. Export only the public 32-byte Base64 key to `Config/SparklePublicKey.txt`. An absent/invalid public key intentionally blocks production builds. Never reuse a sibling app's key. `RECLAIM_SPARKLE_PUBLIC_KEY_FILE` can select a local public-key file for packaging checks.
 3. Configure a valid Developer ID Application identity and Apple's notarization credentials. The default public team identifier follows the sibling apps; `APPLE_TEAM_ID` can override it. No certificate/private key was copied from another app during development.
 4. Configure repository Actions secrets: `DEVELOPER_ID_P12_BASE64`, `DEVELOPER_ID_P12_PASSWORD`, `SPARKLE_ED_PRIVATE_KEY`, and either `NOTARY_API_KEY_P8` + `NOTARY_KEY_ID` + `NOTARY_ISSUER_ID`, or `NOTARY_APPLE_ID` + `NOTARY_APP_PASSWORD`.
 5. Review repository/release permissions. PR CI is read-only and gets no signing credentials. Release signing imports credentials into an ephemeral runner keychain and removes it on all exits.

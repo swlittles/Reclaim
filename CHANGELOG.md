@@ -8,4 +8,4 @@
 - Content duplicates, Trash recovery, local action history, isolated Dev builds.
 - Signed Sparkle update integration and universal notarized release pipeline.
 
-Initial local development build; public distribution is not yet configured.
+Initial release. Universal Developer ID distribution and a signed Sparkle feed are produced by the release workflow.

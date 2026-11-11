@@ -48,7 +48,7 @@ Computer-use app selection could not bind a window after a background-only relau
 
 ## Limits and release prerequisites
 
-This is a functioning local development build, not a published/notarized stable release. `Config/SparklePublicKey.txt` intentionally remains empty until a fresh Reclaim signing key is configured. Another app's key was not reused. Public GitHub publication, Developer ID/notary credential provisioning, stable DMG notarization and a real signed update installation were not performed.
+The initial validation above preceded public distribution. On 2026-11-10, the public repository and a fresh product-specific Sparkle key were configured, and the existing Apple signing/notarization credentials were provisioned from Bustelo through an encrypted one-time transfer. Stable notarization/publication evidence will be recorded below after the release workflow completes. A real signed update installation has not been claimed.
 
 Actual runtime checks were on arm64 macOS 27.0.1. The x86_64 slice was cross-compiled and statically verified; Intel runtime and macOS 13 runtime were not tested. The installed SDK/compiler validates deployment availability, but that is not a substitute for those runtime tests.
 
