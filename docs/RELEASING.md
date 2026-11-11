@@ -39,3 +39,6 @@ swift scripts/verify-update.swift Config/SparklePublicKey.txt release-assets/app
 The release feed script also runs this public-key check before publication, so a mismatched signing secret cannot produce a seemingly valid but unusable updater feed.
 
 Also verify the app's nested code signatures, `xcrun stapler validate`, `spctl --assess --type execute --verbose=2`, and universal architectures. Both 0.1.0 and 0.1.1 published downloads passed these checks. A real production update from 0.1.0 (build 1) to 0.1.1 (build 2) was completed through Sparkle in `/Applications/Reclaim.app`, including download, verification, Install and Relaunch, and verification of the relaunched installed app. Existing saved scan data was retained. Intel and oldest-supported-macOS runtime checks remain outstanding; the updater test ran on Apple Silicon macOS 27.0.1.
+
+
+The 0.1.2 release (build 3) also passed published-download verification and a real signed Sparkle installation from 0.1.1 in `/Applications`. New storage-warning settings default to 10% free while preserving legacy roots, exclusions and automation preferences; native filter/progress validation is recorded in [VALIDATION.md](VALIDATION.md).
