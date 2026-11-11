@@ -18,6 +18,7 @@ import UserNotifications
     @Published var busy = false
     @Published var cleaning = false
     @Published var status = "Ready to scan"
+    @Published var scanProgress: ScanProgress?
     @Published var errorMessage: String?
     @Published var review: ReviewState?
     @Published var history: [HistoryEntry] = []
@@ -40,7 +41,7 @@ import UserNotifications
         updates.isCleaning = { [weak self] in self?.cleaning ?? false }
         updates.changed = { [weak self] in self?.objectWillChange.send() }
         updates.start()
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in Task { @MainActor in self?.scheduledTick() } }
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in Task { @MainActor in self?.scheduledTick() } }
     }
     var findings: [Finding] { result?.findings ?? [] }
     var eligibleSelection: [Finding] { findings.filter { f in selected.contains(f.id) && f.selectable && !settings.exclusions.contains(where: { isWithin(f.path, $0) }) } }
@@ -54,25 +55,39 @@ import UserNotifications
     var selectedBytes: Int64 { FileSystem.nonoverlapping(eligibleSelection.filter { $0.docker == nil }).reduce(0) { $0 + $1.measurement.allocated } }
     var inventoryBytes: Int64 { FileSystem.nonoverlapping(findings.filter { $0.docker == nil }).reduce(0) { $0 + $1.measurement.allocated } }
     var startupVolume: VolumeInfo? { volumes.first(where: { $0.path == "/" }) ?? volumes.first }
+    var menuBarStorage: MenuBarStorageSettings {
+        get { settings.menuBarStorage ?? MenuBarStorageSettings() }
+        set { settings.menuBarStorage = newValue }
+    }
+    func refreshVolumes() { volumes = StorageScanner.volumes() }
+    /// Prevent delayed callbacks from an earlier scan from updating a newer operation.
+    func receiveProgress(_ progress: ScanProgress, token expected: CancellationToken) {
+        guard busy, token === expected else { return }
+        scanProgress = progress
+        if !progress.path.isEmpty { status = progress.path }
+    }
     var roots: [String] { Array(Set(settings.roots + StorageScanner.defaultRoots(home: FileManager.default.homeDirectoryForCurrentUser.path))).sorted() }
     func scan(deep: Bool = false, targeted: Bool = false) {
         if targeted && settings.roots.isEmpty { errorMessage = "Add at least one custom folder before a targeted scan."; return }
         guard !busy else { return }; busy = true; selected.removeAll(); selectionNote = nil; duplicates = []; hashComplete = false; token = CancellationToken()
         status = deep ? "Searching accessible home folders…" : "Scanning storage…"
+        scanProgress = ScanProgress("Discovering locations")
         let t = token, config = settings
         let options = ScanOptions(roots: config.roots, exclusions: config.exclusions, deep: deep, includeSystemLocations: !targeted, largeFileThreshold: config.largeFileThreshold, toolOverrides: config.toolOverrides)
         var partial = ScanResult(); partial.complete = false; result = partial
         let owner = self
         Task.detached(priority: .utility) {
-            let scanned = StorageScanner(token: t).scan(options) { path, items in
+            let scanned = StorageScanner(token: t).scan(options, activityProgress: { progress in
+                Task { @MainActor in owner.receiveProgress(progress, token: t) }
+            }) { path, items in
                 Task { @MainActor in
-                    if owner.busy && !owner.cleaning { owner.status = path; owner.result?.findings.append(contentsOf: items) }
+                    if owner.busy && owner.token === t && !owner.cleaning { owner.status = path; owner.result?.findings.append(contentsOf: items) }
                 }
             }
             await MainActor.run {
                 var scan = scanned
                 owner.applyRunningAppProtection(&scan)
-                owner.result = scan; owner.volumes = scan.volumes; owner.busy = false
+                owner.result = scan; owner.volumes = scan.volumes; owner.busy = false; owner.scanProgress = nil
                 owner.status = scan.complete ? "Scan finished · \(scan.findings.count) items" : "Partial scan · \(scan.findings.count) items"
                 do { try owner.store.write(scan, to: "scan.json") } catch { owner.errorMessage = error.localizedDescription }
                 owner.notifyLowSpace()
@@ -140,18 +155,24 @@ import UserNotifications
     }
     func findDuplicates() {
         guard !busy else { return }; busy = true; token = CancellationToken(); status = "Hashing duplicate candidates…"; hashComplete = false
+        scanProgress = ScanProgress("Discovering duplicate candidates")
         let roots = roots, exclusions = settings.exclusions, t = token, owner = self
         Task.detached(priority: .utility) {
             var notes: [String] = []
-            let groups = DuplicateScanner.scan(roots: roots, exclusions: exclusions, token: t, progress: { path in Task { @MainActor in owner.status = path } }, issue: { notes.append($0) })
+            let groups = DuplicateScanner.scan(roots: roots, exclusions: exclusions, token: t, progress: { path in Task { @MainActor in if owner.busy && owner.token === t { owner.status = path } } }, activityProgress: { progress in Task { @MainActor in owner.receiveProgress(progress, token: t) } }, issue: { notes.append($0) })
             let scanNotes = notes
             // Add content-verified duplicates to the same review pipeline.
-            let extra = groups.flatMap { group in group.paths.map { path in Finding(path: path, category: .largeFiles, detail: "Content-identical duplicate · SHA-256 \(group.digest). Keep at least one copy.", measurement: FileSystem.measure(path, token: t)) } }
+            let paths = groups.flatMap { group in group.paths.map { ($0, group.digest) } }
+            let extra = paths.enumerated().compactMap { index, value -> Finding? in
+                guard !t.isCancelled else { return nil }
+                Task { @MainActor in owner.receiveProgress(ScanProgress("Measuring duplicate files", completed: Double(index), total: Double(paths.count), path: value.0), token: t) }
+                return Finding(path: value.0, category: .largeFiles, detail: "Content-identical duplicate · SHA-256 \(value.1). Keep at least one copy.", measurement: FileSystem.measure(value.0, token: t))
+            }
             await MainActor.run {
                 owner.duplicates = groups; owner.duplicateNotes = scanNotes; owner.hashComplete = !t.isCancelled && scanNotes.isEmpty
                 if owner.result == nil { owner.result = ScanResult() }
                 for f in extra where !owner.findings.contains(where: { $0.id == f.id }) { owner.result?.findings.append(f) }
-                owner.busy = false; owner.status = t.isCancelled || !scanNotes.isEmpty ? "Partial duplicate search · \(groups.count) groups" : "\(groups.count) duplicate groups found"
+                owner.busy = false; owner.scanProgress = nil; owner.status = t.isCancelled || !scanNotes.isEmpty ? "Partial duplicate search · \(groups.count) groups" : "\(groups.count) duplicate groups found"
             }
         }
     }
@@ -195,7 +216,7 @@ import UserNotifications
         do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; objectWillChange.send() } catch { errorMessage = error.localizedDescription }
     }
     func scheduledTick() {
-        volumes = StorageScanner.volumes()
+        refreshVolumes()
         if settings.scheduledScans && !busy && Date().timeIntervalSince(lastAutomaticScan) > 86_400 { lastAutomaticScan = Date(); scan() }
         notifyLowSpace()
     }

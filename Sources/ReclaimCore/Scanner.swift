@@ -30,33 +30,34 @@ public final class StorageScanner {
         var seen = Set<String>()
         return locations.filter { seen.insert($0.1).inserted }
     }
-    public func scan(_ options: ScanOptions, progress: @escaping (String, [Finding]) -> Void = { _, _ in }) -> ScanResult {
+    public func scan(_ options: ScanOptions, activityProgress: (ScanProgress) -> Void = { _ in }, progress: @escaping (String, [Finding]) -> Void = { _, _ in }) -> ScanResult {
         var result = ScanResult(), seen = Set<String>(), repos = Set<String>(), families = Set<String>()
+        var candidates: [Finding] = []
         let fm = FileManager.default
+        activityProgress(ScanProgress("Checking running processes"))
         let activity = ActivitySnapshot.capture()
+        activityProgress(ScanProgress("Discovering locations"))
         let git = GitService(executable: ToolLocator.find("git", overrides: options.toolOverrides) ?? "/usr/bin/git")
         func excluded(_ p: String) -> Bool { options.exclusions.contains { isWithin(p, $0) } }
         func add(_ path: String, _ category: Category, _ detail: String, _ action: CleanupAction = .trash, blocked: String? = nil, worktree: Worktree? = nil) {
             guard !token.isCancelled, !excluded(path) else { return }
             // A generic cache row must never bypass a more specific shared-store protection.
             if !seen.insert(path).inserted {
-                if let index = result.findings.firstIndex(where: { $0.path == path }) {
+                if let index = candidates.firstIndex(where: { $0.path == path }) {
                     if action == .reportOnly {
-                        result.findings[index].action = action; result.findings[index].blockedReason = blocked
-                        result.findings[index].category = category; result.findings[index].detail = detail
-                    } else if category == .applications { result.findings[index].detail += " " + detail }
+                        candidates[index].action = action; candidates[index].blockedReason = blocked
+                        candidates[index].category = category; candidates[index].detail = detail
+                    } else if category == .applications { candidates[index].detail += " " + detail }
                 }
                 return
             }
-            var m = FileSystem.measure(path, token: token)
-            if !fm.fileExists(atPath: path) { m.warning = "Missing or inaccessible path"; m.complete = false }
             let modified = (try? fm.attributesOfItem(atPath: path)[.modificationDate]) as? Date
             let repositoryRoot = action == .trash && fm.fileExists(atPath: path + "/.git")
-            let reason = blocked ?? (repositoryRoot ? "Repository root; remove only its individual build artifacts." : nil) ?? m.warning ?? (action == .trash ? activity.blocker(for: path) : nil)
-            result.findings.append(Finding(path: path, category: category, detail: detail, measurement: m, modified: modified, action: action, blockedReason: reason, git: worktree))
-            progress(path, Array(result.findings.suffix(1)))
+            let reason = blocked ?? (repositoryRoot ? "Repository root; remove only its individual build artifacts." : nil)
+            candidates.append(Finding(path: path, category: category, detail: detail, modified: modified, action: action, blockedReason: reason, git: worktree))
         }
         func children(_ path: String, _ category: Category, _ detail: String, _ action: CleanupAction = .trash, blocked: String? = nil) {
+            activityProgress(ScanProgress("Discovering locations", completed: Double(candidates.count), unit: "candidates", path: path))
             guard fm.fileExists(atPath: path), !excluded(path) else { return }
             do { for url in try fm.contentsOfDirectory(at: URL(fileURLWithPath: path), includingPropertiesForKeys: nil) { if token.isCancelled { break }; add(url.path, category, detail, action, blocked: blocked) } }
             catch { result.issues.append("\(path): \(error.localizedDescription)"); result.complete = false }
@@ -137,11 +138,12 @@ public final class StorageScanner {
                         stack.append((url.path, depth + 1))
                     }
                 } catch { result.issues.append("\(path): \(error.localizedDescription)"); result.complete = false }
-                if inspected % 200 == 0 { progress("Searching \(path)", []) }
+                if inspected % 200 == 0 { activityProgress(ScanProgress("Discovering project folders", completed: Double(inspected), unit: "folders", path: path)) }
             }
         }
-        for path in repos.sorted() {
+        for (index, path) in repos.sorted().enumerated() {
             if token.isCancelled { break }
+            activityProgress(ScanProgress("Inspecting Git repositories", completed: Double(index), total: Double(repos.count), unit: "repositories", path: path))
             do {
                 let family = try git.family(at: path, token: token)
                 guard let common = family.first?.commonDirectory, families.insert(common).inserted else { continue }
@@ -162,11 +164,29 @@ public final class StorageScanner {
                 }
             } catch { result.issues.append("Git \(path): \(error.localizedDescription)"); result.complete = false }
         }
+        if !token.isCancelled { activityProgress(ScanProgress("Inspecting Git repositories", completed: Double(repos.count), total: Double(repos.count), unit: "repositories")) }
+        // Discover first so measurement has a stable, real denominator. Stream completed items.
+        for (index, candidate) in candidates.enumerated() {
+            if token.isCancelled { break }
+            var finding = candidate
+            activityProgress(ScanProgress("Measuring storage", completed: Double(index), total: Double(candidates.count), path: finding.path))
+            if token.isCancelled { break }
+            finding.measurement = FileSystem.measure(finding.path, token: token, progress: { entries in
+                activityProgress(ScanProgress("Measuring storage", completed: Double(index), total: Double(candidates.count), path: finding.path, filesInspected: entries))
+            })
+            if !fm.fileExists(atPath: finding.path) { finding.measurement.warning = "Missing or inaccessible path"; finding.measurement.complete = false }
+            finding.blockedReason = finding.blockedReason ?? finding.measurement.warning ?? (finding.action == .trash ? activity.blocker(for: finding.path) : nil)
+            result.findings.append(finding)
+            progress(finding.path, [finding])
+            if !token.isCancelled { activityProgress(ScanProgress("Measuring storage", completed: Double(index + 1), total: Double(candidates.count), path: finding.path)) }
+        }
         if options.includeSystemLocations {
+            activityProgress(ScanProgress("Inspecting local Docker storage"))
             let docker = DockerService(executable: ToolLocator.find("docker", overrides: options.toolOverrides))
             let inventory = docker.inventory(token: token)
             result.findings += inventory.findings; result.issues += inventory.issues
         }
+        activityProgress(ScanProgress("Checking disk capacity"))
         result.volumes = Self.volumes()
         result.complete = result.complete && !token.isCancelled
         if token.isCancelled { result.issues.append("Scan cancelled. Results are partial.") }

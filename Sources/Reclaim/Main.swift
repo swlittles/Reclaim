@@ -63,15 +63,26 @@ import ReclaimCore
     func updateIcon() {
         let symbol = model.busy ? "arrow.triangle.2.circlepath" : (model.updates.availableVersion == nil ? "externaldrive.badge.checkmark" : "externaldrive.badge.plus")
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: AppIdentity.name); image?.isTemplate = true
-        statusItem.button?.image = image; statusItem.button?.toolTip = AppIdentity.name + " · " + model.status
+        guard let button = statusItem.button else { return }
+        button.image = image
+        let volume = model.startupVolume
+        let low = volume.map { model.menuBarStorage.isLow(total: $0.total, free: $0.free) } ?? false
+        let percentage = volume.flatMap { MenuBarStorageSettings.percentageLeft(total: $0.total, free: $0.free) }
+        statusItem.length = low ? NSStatusItem.variableLength : NSStatusItem.squareLength
+        button.imagePosition = low ? .imageLeading : .imageOnly
+        button.attributedTitle = NSAttributedString(string: low ? " " + (percentage ?? "") : "", attributes: [.foregroundColor: NSColor.systemYellow, .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)])
+        button.toolTip = AppIdentity.name + " · " + (volume.map { "\(percentage ?? "") · \(bytes($0.free)) available\n" } ?? "") + (model.scanProgress?.label ?? model.status)
+        button.setAccessibilityLabel(AppIdentity.name + (low ? " · Low storage · " + (percentage ?? "") : ""))
     }
     func menuWillOpen(_ menu: NSMenu) {
+        model.refreshVolumes()
         menu.removeAllItems()
         func add(_ title: String, _ selector: Selector, key: String = "", enabled: Bool = true) {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: key); item.target = self; item.isEnabled = enabled; menu.addItem(item)
         }
         let title = NSMenuItem(title: AppIdentity.name, action: nil, keyEquivalent: ""); title.isEnabled = false; menu.addItem(title)
         if let v = model.startupVolume { let item = NSMenuItem(title: "\(bytes(v.free)) available of \(bytes(v.total))", action: nil, keyEquivalent: ""); menu.addItem(item) }
+        if let progress = model.scanProgress { let item = NSMenuItem(title: progress.label, action: nil, keyEquivalent: ""); item.isEnabled = false; menu.addItem(item) }
         menu.addItem(.separator())
         add("Open Reclaim…", #selector(openWindow), key: "o")
         add("Scan Storage…", #selector(scan), enabled: !model.busy)

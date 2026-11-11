@@ -80,7 +80,14 @@ struct MainView: View {
     private var footer: some View {
         HStack(spacing: 12) {
             Circle().fill(model.busy ? Color.orange : accent).frame(width: 6, height: 6)
-            Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            if let progress = model.scanProgress {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(progress.label).font(.caption.monospacedDigit()).lineLimit(1)
+                    if let fraction = progress.fraction { ProgressView(value: fraction).progressViewStyle(.linear) }
+                    else { ProgressView().progressViewStyle(.linear) }
+                }.frame(width: 235).help(progress.detail + "\nPercentages apply to this phase; discovery has no known total.")
+            }
+            Text(model.busy ? model.status : (model.selectionNote ?? model.status)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
             if !model.selected.isEmpty {
                 Text("\(model.eligibleSelection.count) selected · ~\(bytes(model.selectedBytes))").font(.caption.monospacedDigit())
@@ -165,6 +172,8 @@ struct FindingsView: View {
     @State private var worktreeScope = 1
     @State private var customAgeDays = 14
     @State private var showClassificationHelp = false
+    @State private var showFilters = false
+    @State private var showWorktreeInfo = false
     var effectiveAgeDays: Int { ageDays == -1 ? max(1, customAgeDays) : ageDays }
     var linked: [Finding] { model.findings.filter { $0.category == .worktrees && $0.git?.main == false } }
     var visible: [Finding] {
@@ -186,42 +195,28 @@ struct FindingsView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search paths, repositories, or tools", text: $model.search).textFieldStyle(.plain)
-                Picker("Sort", selection: $largestFirst) { Text("Largest first").tag(true); Text("Path").tag(false) }.labelsHidden().frame(width: 125)
-            }.padding(14).background(Color(nsColor: .controlBackgroundColor))
-            HStack(spacing: 12) {
-                Picker("Show", selection: $eligibility) { Text("All items").tag(0); Text("Eligible").tag(1); Text("Protected").tag(2) }.frame(width: 150)
-                Picker("Age", selection: $ageDays) { Text("Any age").tag(0); Text("7+ days").tag(7); Text("14+ days (2 weeks)").tag(14); Text("30+ days").tag(30); Text("90+ days").tag(90); Text("Custom days…").tag(-1) }.frame(width: 190)
-                if ageDays == -1 { TextField("Days", value: $customAgeDays, format: .number).textFieldStyle(.roundedBorder).frame(width: 55).help("Minimum age in days, at least 1.") }
-                Picker("Size", selection: $minBytes) { Text("Any size").tag(Int64(0)); Text("100 MB+").tag(Int64(100_000_000)); Text("1 GB+").tag(Int64(1_000_000_000)) }.frame(width: 145)
-                Spacer()
-                Text("\(visible.count) items").font(.caption).foregroundStyle(.secondary)
-            }.padding(.horizontal, 14).padding(.vertical, 10)
-            HStack(spacing: 12) {
-                Picker("Impact", selection: $classification) {
-                    Text("All classifications").tag("All classifications")
-                    ForEach(ImpactClass.allCases) { value in Text(value.rawValue).tag(value.rawValue) }
-                }.frame(width: 265)
-                Button { showClassificationHelp.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(.plain).help("How impact classifications work")
-                    .popover(isPresented: $showClassificationHelp) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Classification describes likely impact").font(.headline)
-                            Text("Rules use the storage location, Git metadata, and artifact evidence. They do not prove a file is unused. Third-party apps can reference arbitrary paths; even cache removal can affect offline content.")
-                            Text("Protected describes whether cleanup is allowed now. A lower-risk cache can still be protected because its owner is running. Select a row to see the evidence and expected consequence.")
-                        }.font(.callout).padding(20).frame(width: 360)
-                    }
-                Spacer()
-                Button("Select All Shown") { model.selectAllVisible(visible) }.disabled(model.busy || visible.isEmpty)
-                    .help("Select eligible items in the current filters. Skip exclusions, overlaps, and the last known copy of a duplicate.")
-                Button("Clear Selection") { model.clearSelection() }.disabled(model.busy || model.selected.isEmpty)
-            }.padding(.horizontal, 14).padding(.bottom, 10)
-            if let note = model.selectionNote { Text(note).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 8) }
-            if model.page == .worktrees { worktreeInfo }
-            if model.page == .developer {
-                HStack { Text("Shared stores, simulator devices, and VM images are inventory only.").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Tool Checks…") { model.checkTools() }.disabled(model.busy) }.padding(12)
-            }
+                TextField("Search paths, repositories, or tools", text: $model.search).textFieldStyle(.plain).frame(minWidth: 100)
+                Button { showFilters.toggle() } label: {
+                    Label(activeFilterCount == 0 ? "Filters" : "Filters (\(activeFilterCount))", systemImage: activeFilterCount == 0 ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                }.fixedSize().popover(isPresented: $showFilters) { filterPanel }.help(filterSummary)
+                Picker("Sort", selection: $largestFirst) { Text("Largest first").tag(true); Text("Path").tag(false) }.labelsHidden().frame(width: 120)
+                Menu {
+                    Button("Select All Shown") { model.selectAllVisible(visible) }.disabled(model.busy || visible.isEmpty)
+                    Button("Clear Selection") { model.clearSelection() }.disabled(model.busy || model.selected.isEmpty)
+                } label: { Label("Select", systemImage: "checklist") }.fixedSize().help("Selection applies to shown items. Protected and overlapping items are skipped.")
+                Text("\(visible.count) items").font(.caption).foregroundStyle(.secondary).fixedSize()
+                if model.page == .worktrees {
+                    Button { showWorktreeInfo.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(.plain).help("Worktree protections and discovery locations")
+                        .popover(isPresented: $showWorktreeInfo) { ScrollView { worktreeInfo.padding(18) }.frame(width: 420, height: 350) }
+                }
+                if model.page == .developer {
+                    Menu { Button("Read-only Tool Checks…") { model.checkTools() }.disabled(model.busy) } label: { Image(systemName: "ellipsis.circle") }.fixedSize()
+                        .help("Shared stores, simulators, and VM images are inventory only.")
+                }
+            }.padding(.horizontal, 14).frame(height: 46).background(Color(nsColor: .controlBackgroundColor))
+            Divider()
             if visible.isEmpty { EmptyState(symbol: model.page.symbol, title: model.result == nil ? "Start with a storage scan" : "No matching items", detail: "Add folders for projects and worktrees outside the usual locations. Permission-limited and offline locations may not appear.", action: "Scan Storage") { model.scan() }.disabled(model.busy) }
             else {
                 HStack(spacing: 0) {
@@ -242,13 +237,47 @@ struct FindingsView: View {
             }
         }
     }
+    var activeFilterCount: Int {
+        (eligibility == 0 ? 0 : 1) + (ageDays == 0 ? 0 : 1) + (minBytes == 0 ? 0 : 1) + (classification == "All classifications" ? 0 : 1) + (model.page == .worktrees && worktreeScope != 1 ? 1 : 0)
+    }
+    var filterSummary: String {
+        var parts: [String] = []
+        if eligibility != 0 { parts.append(eligibility == 1 ? "Eligible" : "Protected") }
+        if ageDays != 0 { parts.append("\(effectiveAgeDays)+ days") }
+        if minBytes > 0 { parts.append(bytes(minBytes) + "+") }
+        if classification != "All classifications" { parts.append(classification) }
+        if model.page == .worktrees { parts.append(worktreeScope == 1 ? "Linked worktrees" : (worktreeScope == 2 ? "Main repositories" : "All Git locations")) }
+        return parts.isEmpty ? "No filters applied" : parts.joined(separator: " · ")
+    }
+    func resetFilters() { eligibility = 0; ageDays = 0; minBytes = 0; classification = "All classifications"; worktreeScope = 1 }
+    private var filterPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Text("Filters").font(.headline); Spacer(); Button("Reset") { resetFilters() }.disabled(activeFilterCount == 0) }
+            Divider()
+            if model.page == .worktrees {
+                Picker("Type", selection: $worktreeScope) { Text("Linked worktrees").tag(1); Text("Main repositories").tag(2); Text("All Git locations").tag(0) }
+            }
+            Picker("Show", selection: $eligibility) { Text("All items").tag(0); Text("Eligible").tag(1); Text("Protected").tag(2) }
+            Picker("Age", selection: $ageDays) { Text("Any age").tag(0); Text("7+ days").tag(7); Text("14+ days (2 weeks)").tag(14); Text("30+ days").tag(30); Text("90+ days").tag(90); Text("Custom days…").tag(-1) }
+            if ageDays == -1 { TextField("Minimum days", value: $customAgeDays, format: .number).textFieldStyle(.roundedBorder).help("Minimum age in days, at least 1.") }
+            Picker("Size", selection: $minBytes) { Text("Any size").tag(Int64(0)); Text("100 MB+").tag(Int64(100_000_000)); Text("1 GB+").tag(Int64(1_000_000_000)) }
+            Picker("Impact", selection: $classification) {
+                Text("All classifications").tag("All classifications")
+                ForEach(ImpactClass.allCases) { value in Text(value.rawValue).tag(value.rawValue) }
+            }
+            if model.page == .worktrees && effectiveAgeDays > 0 {
+                Text("Age uses the newest observed content or Git modification, not a last-opened date. Unknown/incomplete ages are excluded. Rescan older results to populate activity; age never overrides protection.").font(.caption).foregroundStyle(.secondary)
+            }
+            DisclosureGroup("About impact classifications", isExpanded: $showClassificationHelp) {
+                Text("Classification describes likely consequences using location and scanner evidence, not a guarantee that a third-party app is unaffected. Select a row to see evidence and consequences. Protected describes whether removal is allowed now.").font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+            }.font(.caption)
+            Divider()
+            HStack { Text("\(visible.count) matching items").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Done") { showFilters = false }.keyboardShortcut(.defaultAction) }
+        }.padding(18).frame(width: 340)
+    }
     private var worktreeInfo: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Picker("Type", selection: $worktreeScope) { Text("Linked worktrees").tag(1); Text("Main repositories").tag(2); Text("All Git locations").tag(0) }.frame(width: 235)
-                Spacer()
-                Text("\(linked.count) linked · \(linked.filter(\.selectable).count) eligible · \(linked.filter { !$0.selectable }.count) protected").font(.caption).foregroundStyle(.secondary)
-            }
+            Text("\(linked.count) linked · \(linked.filter(\.selectable).count) eligible · \(linked.filter { !$0.selectable }.count) protected").font(.headline)
             Text("Main repositories are never removed here. Linked worktrees with local changes, ignored files (including build output or .env), locks, active processes, or missing paths stay protected.").font(.caption).foregroundStyle(.secondary)
             if effectiveAgeDays > 0 {
                 Text("Age uses the newest observed modification in the worktree or its Git HEAD, index, and HEAD log. It is not a last-opened date. Unknown or incomplete ages are excluded; age never overrides protection. Rescan for current activity.").font(.caption).foregroundStyle(.secondary)
@@ -448,6 +477,23 @@ struct SettingsView: View {
                 Toggle("Scan once a day while Reclaim is running", isOn: $model.settings.scheduledScans)
                 Toggle("Notify when startup disk has less than 20 GB available", isOn: Binding(get: { model.settings.lowSpaceNotifications }, set: { model.enableNotifications($0) }))
                 Text("Scheduled scans are read-only. Cleanup always requires review.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Menu bar storage warning") {
+                Toggle("Show yellow percent free when storage is low", isOn: Binding(get: { model.menuBarStorage.enabled }, set: { model.menuBarStorage.enabled = $0 }))
+                HStack {
+                    Text("Warn at or below")
+                    TextField("Threshold", value: Binding(get: { model.menuBarStorage.threshold }, set: { value in
+                        if value.isFinite { model.menuBarStorage.threshold = max(0.1, model.menuBarStorage.unit == .percent ? min(100, value) : value) }
+                    }), format: .number).frame(width: 75)
+                    Picker("Threshold unit", selection: Binding(get: { model.menuBarStorage.unit }, set: { unit in
+                        model.menuBarStorage.unit = unit
+                        if unit == .percent { model.menuBarStorage.threshold = min(100, model.menuBarStorage.threshold) }
+                    })) { ForEach(StorageThresholdUnit.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden().frame(width: 110)
+                }.disabled(!model.menuBarStorage.enabled)
+                Text("Uses startup-disk available space. Below the threshold, the menu bar shows yellow text such as “6% left”; above it, only the icon appears. Updates every minute and when its menu opens. GB uses decimal gigabytes. This does not enable notifications or automatic cleanup.").font(.caption).foregroundStyle(.secondary)
+                if let volume = model.startupVolume, let percentage = MenuBarStorageSettings.percentageLeft(total: volume.total, free: volume.free) {
+                    Label("Now: \(percentage) · \(bytes(volume.free)) available", systemImage: "internaldrive").font(.caption)
+                }
             }
             Section("Developer tools") {
                 ForEach(["git", "docker", "brew", "xcrun"], id: \.self) { name in

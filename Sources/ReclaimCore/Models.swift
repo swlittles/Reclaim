@@ -134,6 +134,8 @@ public struct Settings: Codable {
     public var toolOverrides: [String: String] = [:]
     public var scheduledScans = false
     public var lowSpaceNotifications = false
+    // Optional preserves settings written by earlier releases. Nil uses the standard 10% warning.
+    public var menuBarStorage: MenuBarStorageSettings?
     public var largeFileThreshold: Int64 = 500_000_000
     public init() {}
 }

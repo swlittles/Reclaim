@@ -22,7 +22,7 @@ public enum FileSystem {
             if url.path == "/" { return result }; url.deleteLastPathComponent()
         }
     }
-    public static func measure(_ path: String, token: CancellationToken? = nil, limit: Int = 250_000) -> Measurement {
+    public static func measure(_ path: String, token: CancellationToken? = nil, limit: Int = 250_000, progress: (Int) -> Void = { _ in }) -> Measurement {
         var m = Measurement()
         do {
             let root = try info(path)
@@ -39,6 +39,7 @@ public enum FileSystem {
                     if cloudOnly(s) || s.st_dev != root.st_dev { walker.skipDescendants(); m.complete = false; m.warning = "Skipped cloud placeholder or nested volume."; continue }
                     if symlink(s) { walker.skipDescendants() }
                     entries.append((url.path, s))
+                    if entries.count % 512 == 0 { progress(entries.count) }
                 }
                 if let walkError { throw walkError }
             }
@@ -54,6 +55,7 @@ public enum FileSystem {
                 }
             }
             m.fingerprint = Fingerprint(identity: identity(root), digest: digest.finalize().map { String(format: "%02x", $0) }.joined(), ancestors: try ancestors(path))
+            progress(entries.count)
         } catch { m.complete = false; m.warning = error.localizedDescription }
         return m
     }

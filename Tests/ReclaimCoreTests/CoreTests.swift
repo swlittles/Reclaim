@@ -40,6 +40,45 @@ final class FakeTrash: TrashManaging {
 }
 final class CoreTests {
     let quiet = ActivitySnapshot(paths: [])
+    func testStorageWarningThresholdsAndSettingsMigration() throws {
+        var warning = MenuBarStorageSettings()
+        XCTAssertTrue(warning.isLow(total: 100_000_000_000, free: 10_000_000_000))
+        XCTAssertFalse(warning.isLow(total: 100_000_000_000, free: 10_000_000_001))
+        warning.unit = .gigabytes; warning.threshold = 20
+        XCTAssertTrue(warning.isLow(total: 500_000_000_000, free: 19_000_000_000))
+        XCTAssertFalse(warning.isLow(total: 500_000_000_000, free: 21_000_000_000))
+        warning.enabled = false
+        XCTAssertFalse(warning.isLow(total: 500_000_000_000, free: 1))
+        warning.enabled = true
+        XCTAssertFalse(warning.isLow(total: 0, free: 0))
+        XCTAssertFalse(warning.isLow(total: 100, free: -1))
+        XCTAssertFalse(warning.isLow(total: 100, free: 101))
+        XCTAssertEqual(MenuBarStorageSettings.percentageLeft(total: 1000, free: 6), "<1% left")
+        XCTAssertEqual(MenuBarStorageSettings.percentageLeft(total: 1000, free: 69), "6% left")
+        let legacy = Data("{\"roots\":[\"/custom\"],\"exclusions\":[\"/keep\"],\"toolOverrides\":{},\"scheduledScans\":false,\"lowSpaceNotifications\":false,\"largeFileThreshold\":123}".utf8)
+        var settings = try JSONDecoder().decode(ReclaimCore.Settings.self, from: legacy)
+        XCTAssertEqual(settings.roots, ["/custom"]); XCTAssertEqual(settings.exclusions, ["/keep"])
+        XCTAssertEqual(settings.menuBarStorage, nil)
+        settings.menuBarStorage = warning
+        XCTAssertEqual(try JSONDecoder().decode(ReclaimCore.Settings.self, from: JSONEncoder().encode(settings)).menuBarStorage, warning)
+    }
+    func testProgressRequiresKnownTotalsAndCancellationDoesNotReportCompletion() throws {
+        XCTAssertEqual(ScanProgress("Discovery", completed: 300).fraction, nil)
+        XCTAssertEqual(ScanProgress("Hashing", completed: 50, total: 100).fraction, 0.5)
+        XCTAssertEqual(ScanProgress("Empty", total: 0).fraction, nil)
+        XCTAssertEqual(ScanProgress("Invalid", total: .nan).fraction, nil)
+        XCTAssertEqual(ScanProgress("Bounded", completed: 200, total: 100).fraction, 1)
+        let f = try Fixture(); try f.file("root/large.dat")
+        let token = CancellationToken()
+        var events: [ScanProgress] = []
+        let scan = StorageScanner(token: token).scan(ScanOptions(home: f.root.path, roots: [f.path("root")], includeSystemLocations: false, largeFileThreshold: 1), activityProgress: { snapshot in
+            events.append(snapshot)
+            if snapshot.phase == "Measuring storage" { token.cancel() }
+        })
+        XCTAssertFalse(scan.complete)
+        XCTAssertTrue(events.contains { $0.phase == "Measuring storage" && $0.fraction == 0 })
+        XCTAssertFalse(events.contains { $0.phase == "Measuring storage" && $0.fraction == 1 })
+    }
     func testImpactRulesDistinguishAppStateCachesAndUnknownData() throws {
         func finding(_ path: String, _ category: ReclaimCore.Category = .largeFiles, action: CleanupAction = .trash) -> Finding {
             Finding(path: path, category: category, detail: "fixture", action: action)
@@ -195,7 +234,13 @@ final class CoreTests {
         try f.file("repo/package.json", "{}"); try f.file("repo/node_modules/pkg/index.js")
         try f.file("outside/linked/Cargo.toml", "[package]\nname = \"fixture\""); try f.file("outside/linked/target/debug/output")
         try f.file("repo/venv/precious.txt") // Name alone must not classify an environment.
-        let scan = StorageScanner().scan(ScanOptions(home: f.root.path, roots: [f.path("repo")], includeSystemLocations: false, largeFileThreshold: 1))
+        var events: [ScanProgress] = []
+        let scan = StorageScanner().scan(ScanOptions(home: f.root.path, roots: [f.path("repo")], includeSystemLocations: false, largeFileThreshold: 1), activityProgress: { events.append($0) })
+        let measurement = events.filter { $0.phase == "Measuring storage" }
+        XCTAssertTrue(measurement.count > 1)
+        XCTAssertEqual(measurement.last?.fraction, 1)
+        XCTAssertEqual(Set(measurement.compactMap(\.total)).count, 1)
+        XCTAssertTrue(events.contains { $0.phase == "Discovering locations" && $0.fraction == nil })
         XCTAssertEqual(scan.findings.filter { $0.category == .worktrees }.count, 2)
         XCTAssertTrue(scan.findings.contains { $0.path == f.path("repo/node_modules") && $0.category == .developer })
         XCTAssertFalse(scan.findings.contains { $0.path == f.path("repo/venv") && $0.category == .developer })
@@ -255,7 +300,10 @@ final class CoreTests {
     func testDuplicateHashingUsesContentAndSkipsHardlinks() throws {
         let f = try Fixture(); try f.file("a", "identical"); try f.file("b", "identical"); try f.file("c", "different")
         try FileManager.default.linkItem(atPath: f.path("a"), toPath: f.path("hardlink"))
-        let groups = DuplicateScanner.scan(roots: [f.root.path], exclusions: [], token: CancellationToken())
+        var events: [ScanProgress] = []
+        let groups = DuplicateScanner.scan(roots: [f.root.path], exclusions: [], token: CancellationToken(), activityProgress: { events.append($0) })
+        XCTAssertTrue(events.contains { $0.phase == "Discovering duplicate candidates" && $0.fraction == nil })
+        XCTAssertEqual(events.last?.fraction, 1)
         XCTAssertEqual(groups.count, 1); XCTAssertEqual(groups[0].paths.count, 2)
         XCTAssertFalse(groups[0].paths.contains(f.path("c")))
     }
@@ -329,6 +377,8 @@ func XCTUnwrap<T>(_ value: T?) throws -> T { guard let value else { throw Reclai
     static func main() {
         let suite = CoreTests()
         let tests: [(String, () throws -> Void)] = [
+            ("testStorageWarningThresholdsAndSettingsMigration", suite.testStorageWarningThresholdsAndSettingsMigration),
+            ("testProgressRequiresKnownTotalsAndCancellationDoesNotReportCompletion", suite.testProgressRequiresKnownTotalsAndCancellationDoesNotReportCompletion),
             ("testImpactRulesDistinguishAppStateCachesAndUnknownData", suite.testImpactRulesDistinguishAppStateCachesAndUnknownData),
             ("testBulkSelectionRespectsFiltersExclusionsOverlapAndDuplicateRetention", suite.testBulkSelectionRespectsFiltersExclusionsOverlapAndDuplicateRetention),
             ("testWorktreeAgeUsesNewestContentAndGitActivityAndRejectsUnknownAge", suite.testWorktreeAgeUsesNewestContentAndGitActivityAndRejectsUnknownAge),
