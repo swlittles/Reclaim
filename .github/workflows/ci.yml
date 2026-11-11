@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -12,6 +12,8 @@ jobs:
           persist-credentials: false
       - run: bash scripts/test.sh
       - run: RECLAIM_UNIVERSAL=1 bash scripts/build.sh
+      - name: Validate production packaging and updater configuration
+        run: RECLAIM_BUILD_VARIANT=production RECLAIM_UNIVERSAL=1 RECLAIM_OUTPUT_DIR="$PWD/.build/production-check" bash scripts/build.sh
       - run: '"dist/Reclaim Dev.app/Contents/MacOS/Reclaim Dev" --diagnostics'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

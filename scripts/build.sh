@@ -46,9 +46,11 @@ sign_args=(--force --sign "$identity")
 if [[ "$identity" != - ]]; then sign_args+=(--options runtime --timestamp); fi
 sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
 for component in "$sparkle/Autoupdate" "$sparkle/Updater.app" "$sparkle/XPCServices/Downloader.xpc" "$sparkle/XPCServices/Installer.xpc" "$app/Contents/Frameworks/Sparkle.framework"; do codesign "${sign_args[@]}" "$component"; done
-icon_args=()
-if [[ "$variant" = development ]]; then icon_args+=(--development); fi
-swift scripts/make-icon.swift "$staging" "${icon_args[@]}"
+if [[ "$variant" = development ]]; then
+  swift scripts/make-icon.swift "$staging" --development
+else
+  swift scripts/make-icon.swift "$staging"
+fi
 iconutil -c icns "$staging/Reclaim.iconset" -o "$app/Contents/Resources/Reclaim.icns"
 cp LICENSE docs/THIRD_PARTY_NOTICES.txt "$app/Contents/Resources/"
 python3 - "$app/Contents/Info.plist" "$app_name" "$bundle_id" "$version" "$build" "$variant" "$key_file" <<'PY'
