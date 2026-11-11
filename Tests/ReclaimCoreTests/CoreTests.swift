@@ -40,6 +40,104 @@ final class FakeTrash: TrashManaging {
 }
 final class CoreTests {
     let quiet = ActivitySnapshot(paths: [])
+    func testTrashInventoryUsesHomeAndCurrentUserMountedRoots() throws {
+        let f = try Fixture(), uid = String(getuid()), other = String(getuid() + 1)
+        try f.file("home/.Trash/home-file")
+        try f.file("disk/.Trashes/\(uid)/disk-file")
+        try f.file("disk/.Trashes/\(other)/keep-other-user")
+        try f.file("home/Downloads/keep-outside")
+        let service = TrashService(home: f.path("home"), volumes: { [f.path("disk")] })
+        var events: [ScanProgress] = []
+        let inventory = service.scan(exclusions: [], token: CancellationToken(), activity: quiet, progress: { events.append($0) })
+        XCTAssertTrue(inventory.complete, inventory.issues.joined(separator: ";"))
+        XCTAssertEqual(inventory.findings.count, 2)
+        XCTAssertTrue(inventory.findings.allSatisfy { $0.category == .trash && $0.action == .permanentlyDelete && $0.selectable })
+        XCTAssertEqual(events.last?.fraction, 1)
+        XCTAssertEqual(try inventory.plan(emptyAll: true, exclusions: []).findings.count, 2)
+        XCTAssertThrowsError(try service.validateTarget(f.path("disk/.Trashes/\(other)/keep-other-user")))
+        XCTAssertThrowsError(try service.validateTarget(f.path("home/Downloads/keep-outside")))
+        XCTAssertThrowsError(try service.validateTarget(f.path("home/.Trash")))
+        XCTAssertThrowsError(try service.validateTarget(f.path("home/.Trash/folder/nested")))
+    }
+    func testTrashEmptyReviewDeletesOnlyFrozenTargetsAndKeepsNewItems() throws {
+        let f = try Fixture(), uid = String(getuid())
+        try f.file("home/.Trash/first")
+        try f.file("disk/.Trashes/\(uid)/second")
+        try f.file("home/keep-outside")
+        let service = TrashService(home: f.path("home"), volumes: { [f.path("disk")] })
+        let inventory = service.scan(exclusions: [], token: CancellationToken(), activity: quiet)
+        let plan = try inventory.plan(emptyAll: true, exclusions: [])
+        try f.file("home/.Trash/arrived-after-review")
+        let executor = CleanupExecutor(store: LocalStore(directory: f.root.appendingPathComponent("journal")), trashService: service)
+        let entries = executor.execute(plan, exclusions: { [] }, token: CancellationToken(), activity: { self.quiet })
+        XCTAssertEqual(entries.filter { $0.status == "Completed" }.count, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.path("home/.Trash/first")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.path("disk/.Trashes/\(uid)/second")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.path("home/.Trash/arrived-after-review")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.path("home/keep-outside")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.path("home/.Trash")))
+        XCTAssertThrowsError(try executor.restore(try XCTUnwrap(entries.first), exclusions: []))
+    }
+    func testTrashChangedExcludedAndUnmountedItemsAreSkipped() throws {
+        let f = try Fixture(), uid = String(getuid())
+        try f.file("home/.Trash/changed/file", "before")
+        try f.file("home/.Trash/excluded/keep", "excluded content")
+        try f.file("disk/.Trashes/\(uid)/offline")
+        var mounted = [f.path("disk")]
+        let service = TrashService(home: f.path("home"), volumes: { mounted })
+        let plan = try service.scan(exclusions: [], token: CancellationToken(), activity: quiet).plan(emptyAll: true, exclusions: [])
+        try f.file("home/.Trash/changed/file", "after and changed")
+        mounted = []
+        let executor = CleanupExecutor(store: LocalStore(directory: f.root.appendingPathComponent("journal")), trashService: service)
+        let entries = executor.execute(plan, exclusions: { [f.path("home/.Trash/excluded/keep")] }, token: CancellationToken(), activity: { self.quiet })
+        XCTAssertEqual(entries.count, 3)
+        XCTAssertTrue(entries.allSatisfy { $0.status == "Skipped or failed" })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.path("home/.Trash/changed/file")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.path("home/.Trash/excluded/keep")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.path("disk/.Trashes/\(uid)/offline")))
+    }
+    func testTrashMissingExcludedAndLinkedRootsDoNotClaimFalseEmpty() throws {
+        let f = try Fixture()
+        try FileManager.default.createDirectory(atPath: f.path("missing-home"), withIntermediateDirectories: true)
+        let missing = TrashService(home: f.path("missing-home"), volumes: { [] }).scan(exclusions: [], token: CancellationToken(), activity: quiet)
+        XCTAssertTrue(missing.isEmpty)
+        let unavailable = TrashService(home: f.path("unavailable-home"), volumes: { [] }).scan(exclusions: [], token: CancellationToken(), activity: quiet)
+        XCTAssertFalse(unavailable.isEmpty); XCTAssertFalse(unavailable.complete)
+        try f.file("valuable/keep")
+        try FileManager.default.createDirectory(atPath: f.path("linked-home"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: f.path("linked-home/.Trash"), withDestinationPath: f.path("valuable"))
+        let linked = TrashService(home: f.path("linked-home"), volumes: { [] }).scan(exclusions: [], token: CancellationToken(), activity: quiet)
+        XCTAssertFalse(linked.isEmpty); XCTAssertFalse(linked.complete)
+        XCTAssertTrue(linked.findings.isEmpty); XCTAssertFalse(linked.issues.isEmpty)
+        try f.file("home/.Trash/folder/keep")
+        let service = TrashService(home: f.path("home"), volumes: { [] })
+        let excluded = service.scan(exclusions: [f.path("home/.Trash/folder/keep")], token: CancellationToken(), activity: quiet)
+        let excludedItem = try XCTUnwrap(excluded.findings.first)
+        XCTAssertFalse(excludedItem.selectable)
+        XCTAssertThrowsError(try excluded.plan(emptyAll: true, exclusions: []))
+        let rootExcluded = service.scan(exclusions: [f.path("home/.Trash")], token: CancellationToken(), activity: quiet)
+        XCTAssertFalse(rootExcluded.isEmpty); XCTAssertFalse(rootExcluded.complete)
+        let token = CancellationToken(); token.cancel()
+        XCTAssertFalse(service.scan(exclusions: [], token: token, activity: quiet).isEmpty)
+    }
+    func testTrashSelectedReviewStaysScopedAndOutsidePermanentDeletionIsRefused() throws {
+        let f = try Fixture()
+        try f.file("home/.Trash/a"); try f.file("home/.Trash/b"); try f.file("outside/keep")
+        let service = TrashService(home: f.path("home"), volumes: { [] })
+        var inventory = service.scan(exclusions: [], token: CancellationToken(), activity: quiet)
+        let a = try XCTUnwrap(inventory.findings.first { $0.path == f.path("home/.Trash/a") })
+        XCTAssertEqual(try inventory.plan(selected: [a.id], exclusions: []).findings.count, 1)
+        XCTAssertEqual(try inventory.plan(selected: [a.id], emptyAll: true, exclusions: []).findings.count, 2)
+        inventory.complete = false
+        XCTAssertThrowsError(try inventory.plan(emptyAll: true, exclusions: []))
+        XCTAssertEqual(try inventory.plan(selected: [a.id], exclusions: []).findings.count, 1)
+        XCTAssertThrowsError(try inventory.plan(selected: [a.id], exclusions: [a.path]))
+        let outside = Finding(path: f.path("outside/keep"), category: .trash, detail: "forged trash", measurement: FileSystem.measure(f.path("outside/keep")), action: .permanentlyDelete)
+        let plan = try CleanupPlan(findings: [outside], exclusions: [])
+        let executor = CleanupExecutor(store: LocalStore(directory: f.root.appendingPathComponent("journal")), trashService: service)
+        XCTAssertEqual(executor.execute(plan, exclusions: { [] }, token: CancellationToken(), activity: { self.quiet }).first?.status, "Skipped or failed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
+    }
     func testStorageWarningThresholdsAndSettingsMigration() throws {
         var warning = MenuBarStorageSettings()
         XCTAssertTrue(warning.isLow(total: 100_000_000_000, free: 10_000_000_000))
@@ -377,6 +475,11 @@ func XCTUnwrap<T>(_ value: T?) throws -> T { guard let value else { throw Reclai
     static func main() {
         let suite = CoreTests()
         let tests: [(String, () throws -> Void)] = [
+            ("testTrashInventoryUsesHomeAndCurrentUserMountedRoots", suite.testTrashInventoryUsesHomeAndCurrentUserMountedRoots),
+            ("testTrashEmptyReviewDeletesOnlyFrozenTargetsAndKeepsNewItems", suite.testTrashEmptyReviewDeletesOnlyFrozenTargetsAndKeepsNewItems),
+            ("testTrashChangedExcludedAndUnmountedItemsAreSkipped", suite.testTrashChangedExcludedAndUnmountedItemsAreSkipped),
+            ("testTrashMissingExcludedAndLinkedRootsDoNotClaimFalseEmpty", suite.testTrashMissingExcludedAndLinkedRootsDoNotClaimFalseEmpty),
+            ("testTrashSelectedReviewStaysScopedAndOutsidePermanentDeletionIsRefused", suite.testTrashSelectedReviewStaysScopedAndOutsidePermanentDeletionIsRefused),
             ("testStorageWarningThresholdsAndSettingsMigration", suite.testStorageWarningThresholdsAndSettingsMigration),
             ("testProgressRequiresKnownTotalsAndCancellationDoesNotReportCompletion", suite.testProgressRequiresKnownTotalsAndCancellationDoesNotReportCompletion),
             ("testImpactRulesDistinguishAppStateCachesAndUnknownData", suite.testImpactRulesDistinguishAppStateCachesAndUnknownData),

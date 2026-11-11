@@ -50,8 +50,9 @@ public final class CleanupExecutor {
     let store: LocalStore
     let trash: TrashManaging
     let git: GitService
+    let trashService: TrashService
     private let lock = NSLock()
-    public init(store: LocalStore = LocalStore(), trash: TrashManaging = SystemTrash(), git: GitService = GitService()) { self.store = store; self.trash = trash; self.git = git }
+    public init(store: LocalStore = LocalStore(), trash: TrashManaging = SystemTrash(), git: GitService = GitService(), trashService: TrashService = TrashService()) { self.store = store; self.trash = trash; self.git = git; self.trashService = trashService }
     public func history() -> [HistoryEntry] {
         (store.read([HistoryEntry].self, from: "history.json") ?? []).map { value in
             var v = value
@@ -72,6 +73,7 @@ public final class CleanupExecutor {
             var entry = HistoryEntry(path: finding.path, action: finding.action, status: "Started", detail: finding.action.label)
             do {
                 guard !exclusions().contains(where: { finding.path == $0 || isWithin(finding.path, $0) }) else { throw ReclaimError.refused("Item was excluded after review.") }
+                if finding.action == .permanentlyDelete { try trashService.validateTarget(finding.path, exclusions: exclusions()) }
                 if finding.docker == nil {
                     try PathGuard().validate(finding.path, allowedRoots: plan.roots, exclusions: exclusions())
                     let current = FileSystem.measure(finding.path, token: token)
@@ -92,8 +94,7 @@ public final class CleanupExecutor {
                     entry.trashPath = destination; entry.trashFingerprint = FileSystem.measure(destination).fingerprint
                     entry.detail = "Moved to Trash. Space is not freed until Trash is emptied."
                 case .permanentlyDelete:
-                    let trashRoot = FileManager.default.homeDirectoryForCurrentUser.path + "/.Trash"
-                    guard isWithin(finding.path, trashRoot), finding.path != trashRoot else { throw ReclaimError.refused("Permanent file removal is limited to selected items already in your Trash.") }
+                    try trashService.validateTarget(finding.path, exclusions: exclusions())
                     try FileManager.default.removeItem(atPath: finding.path)
                     entry.detail = "Deleted from Trash permanently."
                 case .worktree:

@@ -87,6 +87,7 @@ import ReclaimCore
         add("Open Reclaim…", #selector(openWindow), key: "o")
         add("Scan Storage…", #selector(scan), enabled: !model.busy)
         add("Worktrees…", #selector(worktrees))
+        add("Trash…", #selector(openTrash))
         add("Developer Storage…", #selector(developer))
         if model.busy { add(model.cleaning ? "Stop After Current Item" : "Cancel Scan", #selector(cancel)) }
         menu.addItem(.separator())
@@ -107,6 +108,7 @@ import ReclaimCore
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { openWindow(); return true }
     @objc func scan() { openWindow(); model.scan() }
     @objc func worktrees() { model.page = .worktrees; openWindow() }
+    @objc func openTrash() { model.page = .trash; openWindow() }
     @objc func developer() { model.page = .developer; openWindow() }
     @objc func settings() { model.page = .settings; openWindow() }
     @objc func cancel() { model.token.cancel() }

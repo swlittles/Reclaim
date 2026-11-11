@@ -18,7 +18,7 @@ struct MainView: View {
                 }.padding(.horizontal, 16).padding(.top, 28)
                 List(selection: $model.page) {
                     Section("STORAGE") {
-                        ForEach(Array(Page.allCases.prefix(8))) { page in Label(page.rawValue, systemImage: page.symbol).tag(page).padding(.vertical, 4) }
+                        ForEach(Page.storagePages) { page in Label(page.rawValue, systemImage: page.symbol).tag(page).padding(.vertical, 4) }
                     }
                     Section {
                         ForEach(Array(Page.allCases.suffix(2))) { page in Label(page.rawValue, systemImage: page.symbol).tag(page).padding(.vertical, 4) }
@@ -39,7 +39,7 @@ struct MainView: View {
             }.background(Color(nsColor: .windowBackgroundColor))
         }
         .tint(accent)
-        .sheet(item: $model.review) { review in ReviewView(model: model, plan: review.plan) }
+        .sheet(item: $model.review) { review in ReviewView(model: model, plan: review.plan, trashOnly: review.trashOnly, emptyTrash: review.emptyTrash) }
         .alert("Reclaim", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) { Button("OK") { model.errorMessage = nil } } message: { Text(model.errorMessage ?? "") }
     }
     private var header: some View {
@@ -50,6 +50,10 @@ struct MainView: View {
             }
             Spacer()
             if model.busy { ProgressView().controlSize(.small); Button(model.cleaning ? "Stop after item" : "Cancel") { model.token.cancel() } }
+            else if model.page == .trash {
+                Button("Open Trash in Finder") { model.openTrashInFinder() }
+                Button { model.refreshTrash() } label: { Label("Refresh Trash", systemImage: "arrow.clockwise") }
+            }
             else {
                 Button { model.addRoot() } label: { Label("Add Folder", systemImage: "folder.badge.plus") }
                 Menu { Button("Quick Scan") { model.scan() }; Button("Deep Home Scan") { model.scan(deep: true) }; Button("Scan Added Folders Only") { model.scan(targeted: true) } } label: { Label("Scan Storage", systemImage: "arrow.clockwise") }.menuStyle(.borderlessButton).fixedSize().padding(8).background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
@@ -58,6 +62,7 @@ struct MainView: View {
     }
     var subtitle: String {
         switch model.page {
+        case .trash: return "Review what is already in Trash. Delete permanently when you are ready."
         case .worktrees: return "Linked worktrees across tools and locations. Main repositories stay protected."
         case .developer: return "Build artifacts, package caches, containers, and virtual disks."
         case .duplicates: return "Compare content on demand. Keep the copies that matter."
@@ -74,6 +79,7 @@ struct MainView: View {
         case .history: HistoryView(model: model)
         case .settings: SettingsView(model: model)
         case .duplicates: DuplicatesView(model: model)
+        case .trash: TrashView(model: model)
         default: FindingsView(model: model)
         }
     }
@@ -89,7 +95,7 @@ struct MainView: View {
             }
             Text(model.busy ? model.status : (model.selectionNote ?? model.status)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
-            if !model.selected.isEmpty {
+            if !model.selected.isEmpty && model.page != .trash {
                 Text("\(model.eligibleSelection.count) selected · ~\(bytes(model.selectedBytes))").font(.caption.monospacedDigit())
                 Button("Review Actions…") { model.makeReview() }.buttonStyle(.borderedProminent).disabled(model.busy || model.eligibleSelection.isEmpty)
             }
@@ -184,7 +190,7 @@ struct FindingsView: View {
             case .developer: matches = [.developer, .containers, .virtualDisks].contains(f.category)
             case .largeFiles: matches = [.largeFiles, .downloads, .backups].contains(f.category)
             case .applications: matches = f.category == .applications
-            default: matches = ![.worktrees, .containers, .virtualDisks, .applications].contains(f.category)
+            default: matches = ![.worktrees, .containers, .virtualDisks, .applications, .trash].contains(f.category)
             }
             let selectable = f.selectable && !model.settings.exclusions.contains(where: { isWithin(f.path, $0) })
             let eligible = eligibility == 0 || (eligibility == 1 ? selectable : !selectable)
@@ -296,10 +302,14 @@ struct FindingsView: View {
 struct FindingRow: View {
     @ObservedObject var model: AppModel
     var finding: Finding
-    var excluded: Bool { model.settings.exclusions.contains { isWithin(finding.path, $0) } }
+    var selection: Binding<Set<String>>? = nil
+    var excluded: Bool { model.settings.exclusions.contains { isWithin(finding.path, $0) || (finding.category == .trash && isWithin($0, finding.path)) } }
     var body: some View {
         HStack(spacing: 12) {
-            Toggle("Select \(finding.name)", isOn: Binding(get: { model.selected.contains(finding.id) }, set: { value in if value { model.selected.insert(finding.id) } else { model.selected.remove(finding.id) } })).labelsHidden().toggleStyle(.checkbox).disabled(!finding.selectable || model.busy || excluded)
+            Toggle("Select \(finding.name)", isOn: Binding(get: { (selection?.wrappedValue ?? model.selected).contains(finding.id) }, set: { value in
+                if let selection { if value { selection.wrappedValue.insert(finding.id) } else { selection.wrappedValue.remove(finding.id) } }
+                else { if value { model.selected.insert(finding.id) } else { model.selected.remove(finding.id) } }
+            })).labelsHidden().toggleStyle(.checkbox).disabled(!finding.selectable || model.busy || excluded)
             Image(systemName: finding.category.symbol).font(.title3).foregroundStyle(finding.selectable ? accent : .secondary).frame(width: 26)
             VStack(alignment: .leading, spacing: 5) {
                 HStack { Text(finding.name).font(.system(size: 13, weight: .medium)).lineLimit(1); if finding.git?.main == true { pill("MAIN", color: .secondary) }; if excluded { pill("EXCLUDED", color: .orange) } }
@@ -355,12 +365,14 @@ struct InspectorView: View {
 struct ReviewView: View {
     @ObservedObject var model: AppModel
     let plan: CleanupPlan
+    var trashOnly = false
+    var emptyTrash = false
     @State private var confirm = false
     var irreversible: Bool { plan.findings.contains { $0.action.irreversible } }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Label("Review \(plan.findings.count) actions", systemImage: "checklist").font(.title2.bold())
-            Text("~\(bytes(plan.allocated)) of allocated storage selected. Moving files to Trash does not free space until Trash is emptied.").foregroundStyle(.secondary)
+            Label(trashOnly ? (emptyTrash ? "Empty Trash — review \(plan.findings.count) items" : "Delete \(plan.findings.count) Trash items") : "Review \(plan.findings.count) actions", systemImage: "checklist").font(.title2.bold())
+            Text(trashOnly ? "~\(bytes(plan.allocated)) allocated. These items are already in Trash. Deletion is permanent; Reclaim cannot restore them. Items added after the scan are not included." : "~\(bytes(plan.allocated)) of allocated storage selected. Moving files to Trash does not free space until Trash is emptied.").foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(plan.findings) { f in
@@ -379,7 +391,7 @@ struct ReviewView: View {
             }.frame(maxHeight: 330)
             if irreversible { Toggle("I understand the listed permanent removals have no app Undo.", isOn: $confirm).toggleStyle(.checkbox) }
             Text("Every target is checked again before its action. Changed, excluded, or unsafe items are skipped.").font(.caption).foregroundStyle(.secondary)
-            HStack { Spacer(); Button("Cancel") { model.review = nil }.keyboardShortcut(.cancelAction); Button("Apply Reviewed Actions") { model.execute(plan) }.buttonStyle(.borderedProminent).disabled(irreversible && !confirm) }
+            HStack { Spacer(); Button("Cancel") { model.review = nil }.keyboardShortcut(.cancelAction); Button(trashOnly ? "Delete Permanently" : "Apply Reviewed Actions") { model.execute(plan, trashOnly: trashOnly) }.buttonStyle(.borderedProminent).tint(trashOnly ? .red : accent).disabled(irreversible && !confirm) }
         }.padding(28).frame(width: 620)
     }
 }

@@ -43,9 +43,18 @@ Click the drive in the menu bar to scan, review storage, or open Settings. The f
 - **Developer Storage** finds evidenced SwiftPM, JavaScript, Rust and Python project artifacts, shared package stores, simulator/SDK inventory, local Docker objects, and VM storage.
 - **Large Files** ranks large files and downloads. **Duplicates** groups candidates by size, verifies SHA-256 content, and requires keeping a copy.
 - **Volumes** shows mounted capacity plus an optional read-only APFS layout report. Shared APFS free space is not additive.
+- **Trash** is a dedicated sidebar screen with **Refresh Trash**, allocated-size totals, search, selection, **Delete Selected…**, **Empty Trash…**, Finder access and location/access notes.
 - **History** records individual outcomes, Trash locations, non-overwriting restore, and Git safety refs.
 
 Choose items, click **Review Actions…**, check exact paths and consequences, and apply the reviewed actions. Selection starts empty. Permanent actions need an extra acknowledgement. Each target is checked again before mutation. After cleanup a fresh scan is required.
+
+## Emptying Trash
+
+Open **Trash** in the sidebar (or the menu-bar **Trash…** shortcut). It refreshes only your home Trash and your user-specific Trash on mounted local disks. **Delete Selected…** reviews chosen items; **Empty Trash…** reviews the complete scanned inventory, including items hidden by search. The final sheet lists exact paths and requires an explicit permanent-deletion acknowledgment. Reclaim cannot restore permanently deleted Trash items.
+
+Empty Trash requires complete coverage with no protected or excluded items. Permission failures, inaccessible homes/disks, cancellation, and partial measurements are shown explicitly and never reported as empty. You can still review individually eligible items. Use **Locations** for details, **Open Trash in Finder**, or the Full Disk Access settings shortcut when macOS denies access. Other users' Trash, offline disks, and network servers are outside this screen's scope.
+
+Deletion acts on the reviewed snapshot. Items added after scanning are left for the next refresh; changed, newly excluded, linked, active, foreign-owned, or offline-volume targets are skipped. The Trash folders themselves are retained. After deletion the screen refreshes and History records individual outcomes. No automatic emptying runs in the background.
 
 ## Protecting your work
 

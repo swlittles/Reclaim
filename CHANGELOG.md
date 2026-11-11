@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3
+
+- Add a dedicated Trash sidebar screen and menu-bar shortcut, with Trash-only refresh, allocation totals, search, item inspection, separate selection and deletion history.
+- Add Empty Trash and Delete Selected review flows with an explicit permanent-deletion acknowledgment. Empty Trash reviews the complete scanned inventory even when search hides rows; items added afterward remain untouched.
+- Inventory the current user's home Trash and Trash on mounted local disks. Show missing, excluded, inaccessible, partial and cancelled states without claiming an incomplete scan is empty.
+- Require complete coverage and no protected/excluded items for Empty Trash. Eligible individual items can still be reviewed separately; show Finder and Full Disk Access shortcuts for access problems.
+- Restrict permanent deletion to reviewed direct children of live current-user Trash roots; revalidate fingerprints, ancestry, active processes and exclusions before deletion. Offline-volume, changed, linked or excluded targets are skipped.
+
 ## 0.1.2
 
 - Add scan phase progress bars with real repository/item percentages after discovery, entry counts during large measurements, and byte progress during duplicate hashing. Unknown discovery/provider totals remain indeterminate rather than showing invented percentages.

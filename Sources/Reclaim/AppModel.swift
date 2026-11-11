@@ -28,6 +28,9 @@ import UserNotifications
     @Published var volumes: [VolumeInfo] = StorageScanner.volumes()
     @Published var toolReport = ""
     @Published var volumeReport = ""
+    @Published var trashInventory: TrashInventory?
+    @Published var trashSelected = Set<String>()
+    @Published var trashNeedsRefresh = false
     var token = CancellationToken()
     var showWindow: (() -> Void)?
     var timer: Timer?
@@ -120,7 +123,28 @@ import UserNotifications
             review = ReviewState(plan: try CleanupPlan(findings: candidates, exclusions: settings.exclusions))
         } catch { errorMessage = error.localizedDescription }
     }
-    func execute(_ plan: CleanupPlan) {
+    func refreshTrash() {
+        guard !busy else { return }
+        busy = true; token = CancellationToken(); trashSelected.removeAll(); trashInventory = nil
+        status = "Refreshing Trash…"; selectionNote = nil; scanProgress = ScanProgress("Finding Trash locations")
+        let owner = self, t = token, exclusions = settings.exclusions
+        Task.detached(priority: .utility) {
+            let inventory = TrashService().scan(exclusions: exclusions, token: t, progress: { progress in Task { @MainActor in owner.receiveProgress(progress, token: t) } })
+            await MainActor.run {
+                owner.trashInventory = inventory; owner.trashNeedsRefresh = false; owner.busy = false; owner.scanProgress = nil
+                owner.status = "\(inventory.complete ? "Trash refreshed" : "Partial Trash scan") · \(inventory.findings.count) items"
+            }
+        }
+    }
+    func openTrashInFinder() {
+        if !NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash", isDirectory: true)) { errorMessage = "Finder could not open your home Trash." }
+    }
+    func makeTrashReview(emptyAll: Bool = false) {
+        guard !busy, !trashNeedsRefresh, let inventory = trashInventory else { return }
+        do { review = ReviewState(plan: try inventory.plan(selected: trashSelected, emptyAll: emptyAll, exclusions: settings.exclusions), trashOnly: true, emptyTrash: emptyAll) }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func execute(_ plan: CleanupPlan, trashOnly: Bool = false) {
         guard !busy else { return }
         // Recheck native running app ownership at the final UI boundary.
         var check = ScanResult(); check.findings = plan.findings; applyRunningAppProtection(&check)
@@ -138,7 +162,10 @@ import UserNotifications
                 owner.status = "\(entries.filter { $0.status == "Completed" }.count) of \(plan.findings.count) actions completed"
                 // Every related finding is stale after mutation; require a fresh scan for further cleanup.
                 owner.result = nil; try? owner.store.write(ScanResult(), to: "scan.json")
-                owner.volumes = StorageScanner.volumes(); owner.page = .history
+                owner.volumes = StorageScanner.volumes()
+                // A mutation invalidates every Trash snapshot, including ordinary cleanup into Trash.
+                owner.trashInventory = nil; owner.trashSelected.removeAll(); owner.trashNeedsRefresh = true
+                if trashOnly { owner.page = .trash; owner.refreshTrash() } else { owner.page = .history }
                 owner.updates.resumeDeferredInstall()
             }
         }
@@ -187,7 +214,11 @@ import UserNotifications
         panel.message = "Choose project folders, custom worktree locations, or a mounted local volume."
         if panel.runModal() == .OK { settings.roots = Array(Set(settings.roots + panel.urls.map(\.path))).sorted() }
     }
-    func exclude(_ path: String) { settings.exclusions = Array(Set(settings.exclusions + [path])).sorted(); selected = selected.filter { id in !findings.contains { $0.id == id && isWithin($0.path, path) } } }
+    func exclude(_ path: String) {
+        settings.exclusions = Array(Set(settings.exclusions + [path])).sorted()
+        selected = selected.filter { id in !findings.contains { $0.id == id && isWithin($0.path, path) } }
+        trashSelected = trashSelected.filter { id in !(trashInventory?.findings ?? []).contains { $0.id == id && (isWithin($0.path, path) || isWithin(path, $0.path)) } }
+    }
     func reveal(_ path: String) { if !path.hasPrefix("docker://") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) } }
     func checkTools() {
         guard !busy else { return }; busy = true; status = "Checking developer tools…"
@@ -232,11 +263,15 @@ import UserNotifications
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "low-space", content: content, trigger: nil))
     }
 }
-struct ReviewState: Identifiable { let id = UUID(); let plan: CleanupPlan }
+struct ReviewState: Identifiable {
+    let id = UUID(); let plan: CleanupPlan; let trashOnly: Bool; let emptyTrash: Bool
+    init(plan: CleanupPlan, trashOnly: Bool = false, emptyTrash: Bool = false) { self.plan = plan; self.trashOnly = trashOnly; self.emptyTrash = emptyTrash }
+}
 enum Page: String, CaseIterable, Identifiable {
-    case overview = "Overview", cleanup = "Cleanup", worktrees = "Worktrees", developer = "Developer Storage", largeFiles = "Large Files", duplicates = "Duplicates", applications = "Applications", volumes = "Volumes", history = "History", settings = "Settings"
+    case overview = "Overview", cleanup = "Cleanup", trash = "Trash", worktrees = "Worktrees", developer = "Developer Storage", largeFiles = "Large Files", duplicates = "Duplicates", applications = "Applications", volumes = "Volumes", history = "History", settings = "Settings"
+    static var storagePages: [Page] { allCases.filter { $0 != .history && $0 != .settings } }
     var id: String { rawValue }
     var symbol: String {
-        switch self { case .overview: return "square.grid.2x2"; case .cleanup: return "sparkles"; case .worktrees: return "point.3.connected.trianglepath.dotted"; case .developer: return "hammer"; case .largeFiles: return "doc.zipper"; case .duplicates: return "doc.on.doc"; case .applications: return "app.dashed"; case .volumes: return "externaldrive"; case .history: return "clock.arrow.circlepath"; case .settings: return "gearshape" }
+        switch self { case .overview: return "square.grid.2x2"; case .cleanup: return "sparkles"; case .trash: return "trash"; case .worktrees: return "point.3.connected.trianglepath.dotted"; case .developer: return "hammer"; case .largeFiles: return "doc.zipper"; case .duplicates: return "doc.on.doc"; case .applications: return "app.dashed"; case .volumes: return "externaldrive"; case .history: return "clock.arrow.circlepath"; case .settings: return "gearshape" }
     }
 }
