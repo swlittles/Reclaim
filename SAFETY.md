@@ -1,0 +1,26 @@
+# Cleanup safety
+
+Scanning is read-only; it does not fetch Git remotes, start Docker, prune data, or invoke root commands. Built-in tools are selected from system/Homebrew paths unless explicitly overridden. Commands receive literal argument arrays with noninteractive Git options and bounded time/output. Developer tools may themselves consult their own configuration.
+
+All selections start empty. A review fixes exact targets, fingerprints, actions and recovery semantics. Filesystem identity, full bounded metadata digest, ancestor identity, exclusions and activity are checked before execution, including another check after the journal is written. A changed or partially measured target is skipped. Overlapping parent/child selections and duplicate selections of a path are rejected. Root/system/volume roots and direct repository roots are protected. Explicit user-owned targets inside the current user’s canonical temporary directory can be reviewed; private system storage outside that exception stays protected. Tool-managed objects are removed through the owning tool, never recursive fallbacks.
+
+The app serializes operations, journals attempts before mutation, and never automatically retries interrupted operations. Settings are disabled during cleanup. Cancellation stops between items. A timed-out tool operation may have completed: inspect it before retrying. Journal write failure prevents starting a destructive operation; failure to record a completed result remains an explicit uncertain outcome.
+
+## Reversibility
+
+- **Move to Trash:** uses macOS Trash API. History records the resulting location. Restore verifies the trashed content/ancestors and absent destination; it never overwrites an existing file. If it was emptied/changed externally, restore fails. Trash movement is not claimed to free storage.
+- **Delete from Trash:** exact reviewed items already in the user's Trash; permanent, separately acknowledged. The app never empties other users' Trash or falls back from Trash failures to permanent deletion.
+- **Worktree removal:** Git `worktree remove -- <path>`, without force, only after clean status, separate ignored-file inspection, operation/lock/submodule checks, verified HEAD and durable-ref reachability. Branches stay. A verified `refs/reclaim/<uuid>` preserves the exact commit. Main/bare, unique detached, dirty/untracked/ignored or unknown worktrees stay protected. No branch removal, reset, clean, reflog expiry, or metadata prune.
+- **Docker:** exact reviewed volume/container/image, pinned known local context and endpoint, fresh object signature and reference/state checks. No force, global prune, remote engine or VM disk deletion. Unattached volumes may contain irreplaceable data; permanent removal has no app Undo.
+
+## Limits
+
+No filesystem cleaner can guarantee that an arbitrary other process will not write between validation and a path-based OS/tool operation. Reclaim rejects observed substitutions and symlink ancestors, never follows links for size/hash scans, and performs fresh checks, but Trash/Git/Docker APIs still have short residual race windows. Do not use cleanup against folders being actively edited or built. Process detection checks working directories and running native application ownership, not every possible open file or unsaved editor buffer. It is best effort, not a guarantee.
+
+Nested symlinks count their own metadata, without following targets; a folder containing them can be moved as a whole. Cloud-only placeholders and nested volumes make a measurement incomplete and block cleanup of that finding. Measurements are bounded to 250,000 entries per item; project searches have depth/item/time budgets. Coverage notes and partial states must be respected. Unix-byte filenames that are not valid UTF-8 cannot be safely handled by the Git parser and are refused.
+
+APFS clone extents/snapshots/shared containers and hardlinks across separate findings cannot be attributed exactly. Provider-managed VM allocation can overlap Docker objects; Docker object sizes are deliberately not added to filesystem totals. Estimates are not guaranteed freed bytes.
+
+Shared Cargo/Maven/Gradle/npm/pnpm stores, SDK/simulator devices, APFS snapshots, and VM compaction remain inventory-only. Homebrew and unavailable simulator checks are read-only reports. There is no privileged helper, forced worktree path, automatic deletion, memory cleaner, or OS modification.
+
+Tests create their own UUID fixture directories under this repository's `.build/test-fixtures/`, and fake Trash storage within those fixtures. Real Git deletion runs only against those fixture repositories. Docker mutation tests use a fake command runner; actual engines and volumes are not changed by the test suite.

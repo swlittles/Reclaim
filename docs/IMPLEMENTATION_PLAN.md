@@ -2,6 +2,8 @@
 
 Status: implementation brief, 2026-11-10. Working product name: **Reclaim**.
 
+Execution update: the requested Claude delegate hit its provider limit before writing code. The user then explicitly instructed the primary Codex agent to implement directly. That instruction supersedes the original handoff in section 15. See VALIDATION.md for actual implemented scope and evidence.
+
 ## 1. Product outcome
 
 Build a native, open-source macOS menu-bar utility that explains where storage went, helps users remove ordinary clutter, and understands developer artifacts well enough to avoid losing work. Its differentiator is a cross-location inventory of Git worktrees and developer storage, including worktrees made by coding agents, arbitrary custom paths, container volumes, and virtual-machine disk images.
