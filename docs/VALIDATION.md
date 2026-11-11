@@ -48,10 +48,27 @@ Computer-use app selection could not bind a window after a background-only relau
 
 ## Limits and release prerequisites
 
-The initial validation above preceded public distribution. On 2026-11-10, the public repository and a fresh product-specific Sparkle key were configured, and the existing Apple signing/notarization credentials were provisioned from Bustelo through an encrypted one-time transfer. Stable notarization/publication evidence will be recorded below after the release workflow completes. A real signed update installation has not been claimed.
+The initial validation above preceded public distribution. On 2026-11-10, the public repository and a fresh product-specific Sparkle key were configured, and the existing Apple signing/notarization credentials were provisioned from Bustelo through an encrypted one-time transfer. Stable notarization/publication evidence is recorded below. A real signed update installation has not been claimed.
 
 Actual runtime checks were on arm64 macOS 27.0.1. The x86_64 slice was cross-compiled and statically verified; Intel runtime and macOS 13 runtime were not tested. The installed SDK/compiler validates deployment availability, but that is not a substitute for those runtime tests.
 
 Shared package stores, simulator/Android device deletion, broad Homebrew cleanup execution, Docker build-cache pruning, APFS erase/snapshot deletion, and VM compaction remain report-only or unsupported maintenance actions. App data associations are limited to exact bundle-ID caches/preferences/saved-state evidence; ambiguous/shared Application Support data is not proposed for deletion. Missing worktree metadata pruning is report-only; there is no force-removal path.
 
 Discovery is comprehensive within accessible configured roots, known tool worktree locations and Git family expansion, rather than a claim to bypass TCC or find disconnected volumes. No complete live scan or cleanup of the user's real home storage was used for verification. Budgets, cloud placeholders, permission limits, shared APFS extents, cross-finding hardlinks and best-effort activity detection limit coverage and exact reclaimed-space predictions. See SAFETY.md for residual path races.
+
+## Public distribution follow-up — completed 2026-11-10
+
+- Public repository: https://github.com/swlittles/Reclaim
+- Stable release: https://github.com/swlittles/Reclaim/releases/tag/v0.1.0
+- Release commit/tag target: `ea648c6e3d6f518afa5108bcd656623ffeb33f4d`, `v0.1.0`, build `1`.
+- Successful CI: https://github.com/swlittles/Reclaim/actions/runs/42952829222 (15 core tests, 5 release checks, universal Dev and production packaging checks).
+- Successful signed release workflow: https://github.com/swlittles/Reclaim/actions/runs/42953211284 (4m31s). Apple credentials imported successfully; universal app and DMG signed, notarized, stapled; Gatekeeper and appcast checks passed before publication.
+- An initial CI job using the inherited macos-14 label was rejected by GitHub's runner service. Workflows now use supported `macos-latest`. Production packaging also exposed macOS Bash's empty-array behavior under `set -u`; the icon-generation invocation was corrected and production packaging added to CI.
+- Downloaded actual published DMG, ZIP, SHA256SUMS and appcast. Both SHA-256 checks passed. DMG integrity and stapled ticket validated. The apps inside both ZIP and mounted DMG passed deep/strict code-signature checks, stapled-ticket validation, and Gatekeeper assessment: **accepted; source=Notarized Developer ID**.
+- Verified certificate: **Developer ID Application: Stephen Little (KQFYGC7SWB)**, hardened runtime, secure timestamp, stapled notarization ticket, production bundle ID `io.github.swlittles.Reclaim`. Main executable contains both arm64 and x86_64.
+- Independently verified the published appcast and DMG Ed25519 signatures using CryptoKit and only the committed Reclaim public key. Same-length modified feed and modified archive copies were rejected cryptographically. The reproducible helper is `scripts/verify-update.swift`.
+- Copied the verified signed release into local `dist/Reclaim.app` and launched it. Production settings showed live update controls and automatic checks enabled. **Check for Updates** successfully displayed **You're up to date! Reclaim 0.1.0 is currently the newest version available.** This verifies live signed-feed ingestion; it does not claim a two-version installation test.
+- No real storage cleanup was performed. The signed release remains ready on Overview. Login items, scheduled cleanup scans, notification permission, Full Disk Access and Accessibility were not enabled.
+- Reclaim uses its own new Sparkle key. Only the existing Apple signing/notarization credentials were reused. The encrypted bootstrap workflow run/artifact, temporary Bustelo branch, one-time transfer key, and local credential transfer files were removed; Bustelo's default branch/release setup was unchanged.
+
+The remaining runtime matrix limits above still apply: Intel execution, oldest supported macOS execution, and installation of a future update from an older production version have not been tested. Public distribution and signing configuration are complete.

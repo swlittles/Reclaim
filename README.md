@@ -5,7 +5,9 @@
 
 Reclaim is a native menu-bar storage utility for developers. Review everyday clutter, find build artifacts, and see Git worktrees across project folders, agent worktree locations, custom paths, and mounted disks. Cleanup is always a reviewed choice.
 
-**Public source:** [swlittles/Reclaim](https://github.com/swlittles/Reclaim). The first signed release is being prepared; check [Releases](https://github.com/swlittles/Reclaim/releases) for published downloads.
+**[Download Reclaim for macOS](https://github.com/swlittles/Reclaim/releases/latest)** · [All releases](https://github.com/swlittles/Reclaim/releases) · [Source](https://github.com/swlittles/Reclaim)
+
+Stable downloads are universal (Apple Silicon and Intel), signed with Developer ID, notarized by Apple, and include verified Sparkle updates. Open the DMG, drag **Reclaim** into **Applications**, then launch it from Applications. No Accessibility permission is required. Full Disk Access is optional for broader scan coverage.
 
 ## Use it
 

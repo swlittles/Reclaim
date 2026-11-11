@@ -1,6 +1,6 @@
 # Release engineering
 
-Repository: [swlittles/Reclaim](https://github.com/swlittles/Reclaim). Release and updater configuration was provisioned on 2026-11-10 using the owner's existing Apple Developer ID and notarization credentials from Bustelo, plus a fresh Reclaim Sparkle key. Private values are stored in GitHub Actions secrets, not this repository. The first release run must complete before a stable download or live appcast is available.
+Repository: [swlittles/Reclaim](https://github.com/swlittles/Reclaim). Release and updater configuration was provisioned on 2026-11-10 using the owner's existing Apple Developer ID and notarization credentials from Bustelo, plus a fresh Reclaim Sparkle key. Private values are stored in GitHub Actions secrets, not this repository. The first stable release, [v0.1.0](https://github.com/swlittles/Reclaim/releases/tag/v0.1.0), was published successfully. Both the stable downloads and signed appcast are live.
 
 The product-specific public key is committed in `Config/SparklePublicKey.txt`. Its private counterpart is stored in the local login Keychain under the Sparkle account `io.github.swlittles.Reclaim` and in the repository's `SPARKLE_ED_PRIVATE_KEY` secret. Do not replace this key for ordinary releases. The Apple credentials were transferred through a one-time encrypted artifact; the temporary source branch/workflow run/artifact and local transfer files were removed. Bustelo's default branch and its release configuration were not changed.
 
@@ -27,3 +27,15 @@ The build and release pipeline adapts the owner's Bustelo/Snippet conventions: u
 Sparkle runs only in a production bundle with feed+public key. Daily checks are optional, profiling is disabled, scheduled updates appear quietly in the menu, and installation is user-driven. Cleanup postpones updater relaunch until the journal is settled. Dev and unbundled binaries never start the updater.
 
 DMG layout is a standard application + Applications shortcut, created with hdiutil. Source scripts do not install third-party Python packaging dependencies. Stable validation never silently falls back to unsigned distribution.
+
+## Published-download verification
+
+After publishing, download the actual GitHub release assets, run the SHA-256 checks, and verify the feed and DMG with the committed public key (no private credentials needed):
+
+```sh
+swift scripts/verify-update.swift Config/SparklePublicKey.txt release-assets/appcast.xml release-assets/Reclaim-0.1.0-macos-universal.dmg
+```
+
+The release feed script also runs this public-key check before publication, so a mismatched signing secret cannot produce a seemingly valid but unusable updater feed.
+
+Also verify the app's nested code signatures, `xcrun stapler validate`, `spctl --assess --type execute --verbose=2`, and universal architectures. Reclaim 0.1.0's downloaded DMG and ZIP passed these checks, and the running signed app successfully reported **You're up to date** from the live signed feed. An installation from an older version has not yet been exercised because this is the first release.

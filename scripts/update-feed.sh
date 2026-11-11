@@ -17,3 +17,6 @@ printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$TOOLS/generate_appcast" \
 python3 scripts/validate-appcast.py "$WORK/appcast.xml" "$VERSION" "$(cat BUILD_NUMBER)" "release-assets/$NAME.dmg"
 printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$TOOLS/sign_update" --ed-key-file - --verify "$WORK/appcast.xml"
 cp "$WORK/appcast.xml" release-assets/appcast.xml
+
+# Independently enforce that the release signing secret matches the public key shipped in the app.
+swift scripts/verify-update.swift "${RECLAIM_SPARKLE_PUBLIC_KEY_FILE:-Config/SparklePublicKey.txt}" release-assets/appcast.xml "release-assets/$NAME.dmg"
