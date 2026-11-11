@@ -42,3 +42,6 @@ Also verify the app's nested code signatures, `xcrun stapler validate`, `spctl -
 
 
 The 0.1.2 release (build 3) also passed published-download verification and a real signed Sparkle installation from 0.1.1 in `/Applications`. New storage-warning settings default to 10% free while preserving legacy roots, exclusions and automation preferences; native filter/progress validation is recorded in [VALIDATION.md](VALIDATION.md).
+
+
+The 0.1.3 release (build 4) passed published-download verification and a signed Sparkle update from 0.1.2 in `/Applications`. The dedicated Trash screen was checked in the installed release; this Mac denies Trash access until the user grants Full Disk Access. Permanent deletion was exercised only in disposable fixtures, never the user's Trash. See [VALIDATION.md](VALIDATION.md).
